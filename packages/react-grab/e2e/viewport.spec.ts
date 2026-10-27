@@ -243,10 +243,9 @@ test.describe("Viewport and Scroll Handling", () => {
     await reactGrab.scrollPage(50);
 
     await reactGrab.dragSelect("li:first-child", "li:nth-child(3)");
-    await reactGrab.page.waitForTimeout(500);
+    await reactGrab.page.keyboard.press("Enter");
 
-    const clipboardContent = await reactGrab.getClipboardContent();
-    expect(clipboardContent).toBeTruthy();
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
   });
 
   test("should preserve frozen selection during scroll via arrow navigation", async ({

@@ -83,6 +83,8 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
           filePath={props.selectionFilePath}
           onInputChange={props.onInputChange}
           onSubmit={props.onInputSubmit}
+          regionOverlaps={props.regionOverlaps}
+          onRemoveRegionOverlap={props.onRemoveRegionOverlap}
           selectionLabelShakeCount={props.selectionLabelShakeCount}
           onConfirmDismiss={props.onConfirmDismiss}
           discardPrompt={props.discardPrompt}

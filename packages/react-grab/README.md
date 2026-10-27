@@ -25,7 +25,7 @@ React Grab turns a browser selection into source context your agent can use:
 2. Press **⌘C** or **Ctrl+C**.
 3. Paste the copied context into your agent.
 
-Drag in the same selection mode to mark a free rectangle, including empty space, fixed or sticky chrome, and areas that span more than one layout region. A short drag still selects the element under the pointer. The region stays with the viewport when it starts on fixed or sticky UI, and scrolls with the page otherwise. After you release, type a note and copy context like:
+In selection mode, a click that moves less than 5px selects the deepest element under the pointer. Arrow keys still move to the parent or child. A drag that moves more than 5px always draws a region, including when it starts on an element or covers several of them. A box smaller than 8×8 is ignored. The region lists the elements it overlaps, sorted by how much of the region each one covers, with that share and the share of the element. Remove any you do not want before copying. Shift+click adds or removes elements. Hold Space to let clicks through to the page, then release it to select again. Space stays the activation key when selection is in hold mode on Space. The region stays with the viewport when it starts on fixed or sticky UI, and scrolls with the page otherwise. After you release, type a note and copy context like:
 
 ```txt
 Region at x=62%, y=40% (320×180) — empty space below <ProjectCard> and left of <TaskStats> inside <Dashboard>; Request: add a chart

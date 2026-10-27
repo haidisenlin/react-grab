@@ -42,6 +42,8 @@ export type {
   ElementSelectedEventDetail,
   RegionAnchor,
   RegionMeasurement,
+  RegionOverlapItem,
+  RegionOverlapSnapshot,
   RegionSelectionPayload,
   RegionSelectedEventDetail,
   ReactGrabRegionState,

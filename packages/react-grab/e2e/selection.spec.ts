@@ -235,17 +235,16 @@ test.describe("Selection Bounds and Mutations", () => {
     }
   });
 
-  test("multiple selection boxes should display for drag selection", async ({ reactGrab }) => {
+  test("a drag commits one region instead of element boxes", async ({ reactGrab }) => {
     await reactGrab.activate();
     await reactGrab.dragSelect("li:first-child", "li:nth-child(3)");
-    await reactGrab.page.waitForTimeout(500);
 
     await expect
       .poll(async () => {
-        const info = await reactGrab.getGrabbedBoxInfo();
-        return info.count;
+        const state = await reactGrab.getState();
+        return state.regions?.length ?? 0;
       })
-      .toBeGreaterThan(1);
+      .toBe(1);
   });
 
   test("selection should work on deeply nested elements", async ({ reactGrab }) => {

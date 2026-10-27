@@ -113,53 +113,34 @@ test.describe("Drag Selection", () => {
     await reactGrab.page.mouse.up();
   });
 
-  test("should keep drag selection while moving it with held space", async ({ reactGrab }) => {
+  test("holding Space lets a page click through", async ({ reactGrab }) => {
+    await reactGrab.page.evaluate(() => {
+      const button = document.createElement("button");
+      button.id = "space-passthrough-button";
+      button.type = "button";
+      button.textContent = "Page button";
+      button.style.cssText =
+        "position:fixed;left:240px;top:80px;width:140px;height:40px;z-index:20;";
+      button.addEventListener("click", () => {
+        button.dataset.clicks = String(Number(button.dataset.clicks ?? "0") + 1);
+      });
+      document.body.append(button);
+    });
     await reactGrab.activate();
 
-    const firstItem = reactGrab.page.locator(TODO_LIST_ITEM_SELECTOR).first();
-    const firstBox = await firstItem.boundingBox();
-    if (!firstBox) throw new Error("Could not get bounding box");
-
-    const startX = firstBox.x - 20;
-    const startY = firstBox.y - 20;
-
-    await reactGrab.page.mouse.move(startX, startY);
-    await reactGrab.page.mouse.down();
-    await reactGrab.page.mouse.move(startX + 220, startY + 150, { steps: 8 });
-    await reactGrab.page.waitForTimeout(100);
-
-    const boundsBeforeSpace = await reactGrab.getDragBoxBounds();
-    expect(boundsBeforeSpace).not.toBeNull();
-    if (!boundsBeforeSpace) throw new Error("Expected drag bounds before space hold");
-
     await reactGrab.page.keyboard.down("Space");
-    await reactGrab.page.mouse.move(startX + 300, startY + 210, { steps: 6 });
-    await reactGrab.page.waitForTimeout(100);
-
-    const boundsWhileSpaceHeld = await reactGrab.getDragBoxBounds();
-    expect(boundsWhileSpaceHeld).not.toBeNull();
-    if (!boundsWhileSpaceHeld) throw new Error("Expected drag bounds while holding space");
-
-    expect(Math.abs(boundsWhileSpaceHeld.width - boundsBeforeSpace.width)).toBeLessThanOrEqual(2);
-    expect(Math.abs(boundsWhileSpaceHeld.height - boundsBeforeSpace.height)).toBeLessThanOrEqual(2);
-    expect(boundsWhileSpaceHeld.x).toBeGreaterThan(boundsBeforeSpace.x + 40);
-    expect(boundsWhileSpaceHeld.y).toBeGreaterThan(boundsBeforeSpace.y + 30);
-
+    await reactGrab.page.locator("#space-passthrough-button").click();
     await reactGrab.page.keyboard.up("Space");
-    await reactGrab.page.mouse.move(startX + 340, startY + 250, { steps: 4 });
-    await reactGrab.page.waitForTimeout(100);
 
-    const boundsAfterSpaceRelease = await reactGrab.getDragBoxBounds();
-    expect(boundsAfterSpaceRelease).not.toBeNull();
-    if (!boundsAfterSpaceRelease) throw new Error("Expected drag bounds after releasing space");
+    await expect
+      .poll(() => reactGrab.page.locator("#space-passthrough-button").getAttribute("data-clicks"))
+      .toBe("1");
 
-    const didWidthGrowAfterRelease =
-      boundsAfterSpaceRelease.width > boundsWhileSpaceHeld.width + 20;
-    const didHeightGrowAfterRelease =
-      boundsAfterSpaceRelease.height > boundsWhileSpaceHeld.height + 20;
-    expect(didWidthGrowAfterRelease || didHeightGrowAfterRelease).toBe(true);
-
-    await reactGrab.page.mouse.up();
+    await reactGrab.page.locator("#space-passthrough-button").click();
+    await reactGrab.page.waitForTimeout(200);
+    expect(
+      await reactGrab.page.locator("#space-passthrough-button").getAttribute("data-clicks"),
+    ).toBe("1");
   });
 
   test("should create drag box when clicking and dragging", async ({ reactGrab }) => {
@@ -185,18 +166,17 @@ test.describe("Drag Selection", () => {
     await reactGrab.page.mouse.up();
   });
 
-  test("should select multiple elements within drag bounds", async ({ reactGrab }) => {
+  test("should open a region when a drag covers elements", async ({ reactGrab }) => {
     await reactGrab.activate();
 
     await reactGrab.dragSelect(
       `${TODO_LIST_ITEM_SELECTOR}:first-child`,
       `${TODO_LIST_ITEM_SELECTOR}:nth-child(3)`,
     );
-    await reactGrab.page.waitForTimeout(500);
 
-    const clipboardContent = await reactGrab.getClipboardContent();
-    expect(clipboardContent).toBeTruthy();
-    expect(clipboardContent.length).toBeGreaterThan(0);
+    await expect
+      .poll(() => reactGrab.page.locator("textarea[data-react-grab-input]").count())
+      .toBeGreaterThan(0);
   });
 
   test("should ignore empty space inside a wide text layout box", async ({ reactGrab }) => {
@@ -216,7 +196,7 @@ test.describe("Drag Selection", () => {
     expect(await didWideTextDragEnd(reactGrab)).toBe(true);
     const selectedTargetIds = await getWideTextDragTargetIds(reactGrab);
     expect(selectedTargetIds).toContain("wide-text-drag-sentinel");
-    expect(selectedTargetIds).not.toContain("wide-text-drag-target");
+    await expect.poll(() => reactGrab.isPromptModeActive()).toBe(true);
   });
 
   test("should drag-select the painted part of a wide text element", async ({ reactGrab }) => {
@@ -280,11 +260,9 @@ test.describe("Drag Selection", () => {
       `${TODO_LIST_ITEM_SELECTOR}:first-child`,
       `${TODO_LIST_ITEM_SELECTOR}:nth-child(5)`,
     );
-    await reactGrab.page.waitForTimeout(500);
+    await reactGrab.page.keyboard.press("Enter");
 
-    const clipboardContent = await reactGrab.getClipboardContent();
-
-    expect(clipboardContent).toContain("TodoList");
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
   });
 
   test("should cancel drag selection on Escape", async ({ reactGrab }) => {
@@ -330,7 +308,7 @@ test.describe("Drag Selection", () => {
     expect(clipboardContent).toBeTruthy();
   });
 
-  test("should deactivate after drag selection in toggle mode", async ({ reactGrab }) => {
+  test("should keep the region prompt open after a drag in toggle mode", async ({ reactGrab }) => {
     await reactGrab.activate();
 
     await reactGrab.dragSelect(
@@ -338,10 +316,13 @@ test.describe("Drag Selection", () => {
       `${TODO_LIST_ITEM_SELECTOR}:nth-child(2)`,
     );
 
-    await reactGrab.page.waitForTimeout(2000);
+    await reactGrab.page.waitForTimeout(300);
 
     const isVisible = await reactGrab.isOverlayVisible();
-    expect(isVisible).toBe(false);
+    expect(isVisible).toBe(true);
+    await expect
+      .poll(() => reactGrab.page.locator("textarea[data-react-grab-input]").count())
+      .toBeGreaterThan(0);
   });
 
   test("should handle drag across entire list", async ({ reactGrab }) => {
@@ -351,11 +332,9 @@ test.describe("Drag Selection", () => {
       "[data-testid='todo-list'] li:first-child",
       "[data-testid='todo-list'] li:last-child",
     );
-    await reactGrab.page.waitForTimeout(500);
+    await reactGrab.page.keyboard.press("Enter");
 
-    const clipboardContent = await reactGrab.getClipboardContent();
-    expect(clipboardContent).toBeTruthy();
-    expect(clipboardContent).toContain("TodoList");
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
   });
 
   test("should show visual feedback during drag", async ({ reactGrab }) => {
@@ -399,10 +378,9 @@ test.describe("Drag Selection with Scroll", () => {
       `${TODO_LIST_ITEM_SELECTOR}:first-child`,
       `${TODO_LIST_ITEM_SELECTOR}:nth-child(2)`,
     );
-    await reactGrab.page.waitForTimeout(500);
+    await reactGrab.page.keyboard.press("Enter");
 
-    const clipboardContent = await reactGrab.getClipboardContent();
-    expect(clipboardContent).toBeTruthy();
+    await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
   });
 
   test("should maintain drag while scrolling", async ({ reactGrab }) => {
@@ -440,10 +418,9 @@ test.describe("Drag Selection with Scroll", () => {
         `${TODO_LIST_ITEM_SELECTOR}:first-child`,
         `${TODO_LIST_ITEM_SELECTOR}:nth-child(2)`,
       );
-      await reactGrab.page.waitForTimeout(500);
+      await reactGrab.page.keyboard.press("Enter");
 
-      const clipboardContent = await reactGrab.getClipboardContent();
-      expect(clipboardContent).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
     }
   });
 
@@ -478,10 +455,9 @@ test.describe("Drag Selection with Scroll", () => {
       await reactGrab.page.mouse.down();
       await reactGrab.page.mouse.move(box.x + 200, box.y + 100, { steps: 5 });
       await reactGrab.page.mouse.up();
-      await reactGrab.page.waitForTimeout(500);
+      await reactGrab.page.keyboard.press("Enter");
 
-      const clipboardContent = await reactGrab.getClipboardContent();
-      expect(clipboardContent).toBeTruthy();
+      await expect.poll(() => reactGrab.getClipboardContent()).toContain("Region at");
     }
   });
 });

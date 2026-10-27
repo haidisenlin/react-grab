@@ -9,6 +9,8 @@ export interface RegionLayoutCandidate {
   bounds: AxisRect;
   selector: string | null;
   detail: string | null;
+  regionCoverage?: number;
+  elementCoverage?: number;
 }
 
 export interface RegionNeighbor {
@@ -37,6 +39,15 @@ const intersectsRect = (first: AxisRect, second: AxisRect): boolean =>
   first.y + first.height > second.y;
 
 const areaOf = (rect: AxisRect): number => Math.max(0, rect.width) * Math.max(0, rect.height);
+
+const intersectionArea = (first: AxisRect, second: AxisRect): number => {
+  const width =
+    Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x);
+  const height =
+    Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y);
+  if (width <= 0 || height <= 0) return 0;
+  return width * height;
+};
 
 interface DirectionGap {
   direction: RegionDirection;
@@ -100,6 +111,11 @@ export const describeRegionLayout = (
     if (candidate === ancestor || candidate.key === ancestor?.key) continue;
     if (containsRect(candidate.bounds, region)) continue;
     if (intersectsRect(candidate.bounds, region)) {
+      const regionArea = areaOf(region);
+      const candidateArea = areaOf(candidate.bounds);
+      const overlapArea = intersectionArea(region, candidate.bounds);
+      candidate.regionCoverage = regionArea > 0 ? overlapArea / regionArea : 0;
+      candidate.elementCoverage = candidateArea > 0 ? overlapArea / candidateArea : 0;
       intersecting.push(candidate);
       continue;
     }
@@ -115,7 +131,11 @@ export const describeRegionLayout = (
     });
   }
 
-  intersecting.sort((first, second) => areaOf(first.bounds) - areaOf(second.bounds));
+  intersecting.sort((first, second) => {
+    const regionCoverageDelta = (second.regionCoverage ?? 0) - (first.regionCoverage ?? 0);
+    if (regionCoverageDelta !== 0) return regionCoverageDelta;
+    return (second.elementCoverage ?? 0) - (first.elementCoverage ?? 0);
+  });
 
   return {
     ancestor,

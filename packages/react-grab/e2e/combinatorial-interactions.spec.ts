@@ -315,10 +315,11 @@ test.describe("Combinatorial Interactions", () => {
       await reactGrab.activate();
 
       await reactGrab.dragSelect("[data-testid='perf-cell-0-0']", "[data-testid='perf-cell-4-9']");
+      await reactGrab.page.keyboard.press("Enter");
 
       await expect
         .poll(() => reactGrab.getClipboardContent(), { timeout: CLIPBOARD_COMMIT_TIMEOUT_MS })
-        .toContain("perf-cell-0-0");
+        .toContain("Region at");
       await expect.poll(async () => (await reactGrab.getState()).isDragging).toBe(false);
     });
   });
@@ -345,10 +346,11 @@ test.describe("Combinatorial Interactions", () => {
         "[data-testid='todo-list'] li:first-child",
         "[data-testid='todo-list'] li:last-child",
       );
+      await reactGrab.page.keyboard.press("Enter");
 
       await expect
         .poll(() => reactGrab.getClipboardContent(), { timeout: CLIPBOARD_COMMIT_TIMEOUT_MS })
-        .not.toBe("");
+        .toContain("Region at");
       expect((await reactGrab.getState()).isDragging).toBe(false);
     });
 

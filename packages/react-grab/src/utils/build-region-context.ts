@@ -1,5 +1,5 @@
 import { getComponentDisplayName, resolveElementReferenceContext } from "../core/context.js";
-import type { RegionAnchor, RegionSelectionPayload } from "../types.js";
+import type { RegionAnchor, RegionOverlapSnapshot, RegionSelectionPayload } from "../types.js";
 import { collectRegionCandidates } from "./collect-region-candidates.js";
 import type { CollectedRegionCandidate } from "./collect-region-candidates.js";
 import { createElementSelector } from "./create-element-selector.js";
@@ -19,6 +19,7 @@ export interface RegionContextSource {
   width: number;
   height: number;
   note?: string;
+  excludedElements?: readonly Element[];
 }
 
 export interface BuiltRegionContext {
@@ -64,6 +65,14 @@ const enrichCandidate = async (
 
 const toLayoutCandidate = (candidate: CollectedRegionCandidate): RegionLayoutCandidate => candidate;
 
+const overlapSnapshots = (candidates: readonly RegionLayoutCandidate[]): RegionOverlapSnapshot[] =>
+  candidates.map((candidate) => ({
+    label: candidate.label,
+    selector: candidate.selector,
+    regionCoverage: candidate.regionCoverage ?? 0,
+    elementCoverage: candidate.elementCoverage ?? 0,
+  }));
+
 export const buildRegionContext = async (
   region: RegionContextSource,
   maxLines?: number,
@@ -90,7 +99,11 @@ export const buildRegionContext = async (
 
   try {
     const collected = collectRegionCandidates(viewport);
-    const layout = describeRegionLayout(viewport, collected.candidates.map(toLayoutCandidate));
+    const excludedElements = new Set(region.excludedElements ?? []);
+    const visibleCandidates = collected.candidates.filter(
+      (candidate) => !excludedElements.has(candidate.element),
+    );
+    const layout = describeRegionLayout(viewport, visibleCandidates.map(toLayoutCandidate));
     const ancestor =
       collected.candidates.find((candidate) => candidate.key === layout.ancestor?.key) ?? null;
     await enrichCandidate(ancestor, true, maxLines);
@@ -129,6 +142,7 @@ export const buildRegionContext = async (
         ancestorLabel: layout.ancestor?.label ?? null,
         ancestorSelector: layout.ancestor?.selector ?? null,
         coordinateFrame,
+        overlaps: overlapSnapshots(layout.intersecting),
       },
     };
   } catch {
@@ -153,6 +167,7 @@ export const buildRegionContext = async (
         ancestorLabel: null,
         ancestorSelector: null,
         coordinateFrame,
+        overlaps: [],
       },
     };
   }

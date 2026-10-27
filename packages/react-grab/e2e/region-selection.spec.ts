@@ -225,6 +225,51 @@ test.describe("Region selection", () => {
     expect(Math.abs(Number(localMatch[2]) * 2 - Number(screenMatch[2]))).toBeLessThanOrEqual(2);
   });
 
+  test("ignores a drag smaller than 8 by 8", async ({ reactGrab }) => {
+    await reactGrab.activate();
+    const pad = reactGrab.page.locator("#region-main-pad");
+    await pad.scrollIntoViewIfNeeded();
+    const padBox = await pad.boundingBox();
+    if (!padBox) throw new Error("Could not get main pad bounds");
+    await dragBox(reactGrab, padBox.x + 40, padBox.y + 40, padBox.x + 46, padBox.y + 46);
+
+    await reactGrab.page.waitForTimeout(200);
+    expect(await readRegions(reactGrab)).toEqual([]);
+    expect(await reactGrab.isPromptModeActive()).toBe(false);
+  });
+
+  test("lists overlapped elements and omits one removed before copy", async ({ reactGrab }) => {
+    await reactGrab.page.evaluate(() => {
+      const keep = document.createElement("button");
+      keep.id = "overlap-keep";
+      keep.type = "button";
+      keep.textContent = "Keep target";
+      keep.style.cssText = "position:fixed;left:240px;top:80px;width:120px;height:80px;z-index:30;";
+      const drop = document.createElement("section");
+      drop.id = "overlap-drop";
+      drop.textContent = "Drop target";
+      drop.style.cssText = "position:fixed;left:380px;top:80px;width:120px;height:80px;z-index:30;";
+      document.body.append(keep, drop);
+    });
+    await reactGrab.activate();
+    await dragBox(reactGrab, 230, 70, 510, 170);
+
+    const removeDrop = reactGrab.page.locator("button[aria-label='Remove section']");
+    await expect.poll(() => removeDrop.count()).toBeGreaterThan(0);
+    await expect
+      .poll(() => reactGrab.page.locator("text=/\\d+%\\/\\d+%/").count())
+      .toBeGreaterThan(0);
+    await removeDrop.first().click();
+    await reactGrab.page.keyboard.press("Enter");
+
+    await expect
+      .poll(() => reactGrab.getClipboardContent(), { timeout: CLIPBOARD_COMMIT_TIMEOUT_MS })
+      .toContain("region:");
+    const clipboardContent = await reactGrab.getClipboardContent();
+    expect(clipboardContent).toContain("<button>");
+    expect(clipboardContent).not.toContain("<section>");
+  });
+
   test.describe("device pixel ratio 2", () => {
     test.use({
       viewport: { width: 1440, height: 900 },

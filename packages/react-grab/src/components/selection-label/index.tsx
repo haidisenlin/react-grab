@@ -5,6 +5,7 @@ import {
   on,
   onCleanup,
   onMount,
+  Index,
   Show,
   type Component,
 } from "solid-js";
@@ -436,6 +437,40 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                   onHoverChange={handleTagHoverChange}
                 />
               </div>
+              <Show when={(props.regionOverlaps?.length ?? 0) > 0}>
+                <div class="flex flex-col w-full gap-0.5 px-2 pb-1">
+                  <Index each={props.regionOverlaps ?? []}>
+                    {(overlap) => (
+                      <div class="flex items-center gap-1 w-full min-w-0">
+                        <span
+                          class="truncate text-[11px] leading-4 text-[var(--rg-text-secondary)]"
+                          textContent={
+                            overlap().selector
+                              ? `${overlap().label} ${overlap().selector}`
+                              : overlap().label
+                          }
+                        />
+                        <span
+                          class="shrink-0 tabular-nums text-[11px] leading-4 text-[var(--rg-text-secondary)]"
+                          textContent={`${Math.round(overlap().regionCoverage * 100)}%/${Math.round(overlap().elementCoverage * 100)}%`}
+                        />
+                        <button
+                          type="button"
+                          data-react-grab-ignore-events
+                          aria-label={`Remove ${overlap().label}`}
+                          class="shrink-0 size-4 cursor-pointer text-[var(--rg-text-secondary)]"
+                          onClick={() => {
+                            props.onRemoveRegionOverlap?.(overlap().id);
+                            inputRef?.focus();
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+                  </Index>
+                </div>
+              </Show>
               <BottomSection>
                 <div class="shrink-0 flex justify-between items-end w-full min-h-4">
                   <textarea

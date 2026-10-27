@@ -82,7 +82,30 @@ describe("describeRegionLayout", () => {
 
     expect(layout.isEmpty).toBe(false);
     expect(layout.intersecting.map((item) => item.label)).toEqual(["ProjectCard"]);
+    expect(layout.intersecting[0]?.regionCoverage).toBeCloseTo(9600 / 57600);
+    expect(layout.intersecting[0]?.elementCoverage).toBe(1);
     expect(layout.ancestor?.label).toBe("Dashboard");
+  });
+
+  it("sorts overlaps by how much of the region they cover", () => {
+    const largeOverlap = candidate("large", "LargeCard", {
+      x: 744,
+      y: 320,
+      width: 300,
+      height: 160,
+    });
+    const smallOverlap = candidate("small", "SmallCard", {
+      x: 760,
+      y: 340,
+      width: 120,
+      height: 80,
+    });
+    const layout = describeRegionLayout(region, [dashboard, smallOverlap, largeOverlap]);
+
+    expect(layout.intersecting.map((item) => item.label)).toEqual(["LargeCard", "SmallCard"]);
+    expect(layout.intersecting[0]?.regionCoverage).toBeGreaterThan(
+      layout.intersecting[1]?.regionCoverage ?? 0,
+    );
   });
 });
 

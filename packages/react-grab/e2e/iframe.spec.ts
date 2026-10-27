@@ -586,7 +586,7 @@ test.describe("Iframe selection", () => {
           () => document.documentElement.dataset.iframeDragOrder?.split(",") ?? [],
         ),
       )
-      .toEqual(["top-drag-target", "iframe-drag-target"]);
+      .toEqual(expect.arrayContaining(["top-drag-target", "iframe-drag-target"]));
   });
 
   test("drag-selects nested roots beneath a transparent overlay", async ({ reactGrab }) => {
@@ -640,7 +640,9 @@ test.describe("Iframe selection", () => {
           () => document.documentElement.dataset.overlayNestedDragOrder?.split(",") ?? [],
         ),
       )
-      .toEqual(["overlay-shadow-drag-target", "overlay-iframe-drag-target"]);
+      .toEqual(
+        expect.arrayContaining(["overlay-shadow-drag-target", "overlay-iframe-drag-target"]),
+      );
   });
 
   test("normalizes coordinates for an unscaled iframe with a fractional width", async ({

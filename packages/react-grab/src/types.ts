@@ -231,6 +231,11 @@ export interface PluginHooks {
   onElementHover?: (element: Element) => void | Promise<void>;
   onElementSelect?: (element: Element) => boolean | void | Promise<boolean>;
   onDragStart?: (startX: number, startY: number) => void | Promise<void>;
+  /**
+   * @deprecated Selection-mode drags commit a region. This still fires with the
+   * elements that overlap that region, sorted by how much of the region they
+   * cover. Prefer `onRegionSelect`.
+   */
   onDragEnd?: (elements: Element[], bounds: DragRect) => void | Promise<void>;
   onRegionSelect?: (region: RegionSelectionPayload) => void | Promise<void>;
   onSelectionImages?: (images: SelectionImageSet) => void | Promise<void>;
@@ -474,6 +479,8 @@ export interface ReactGrabRendererProps {
   regionOverlays?: RegionOverlayModel[];
   onRegionGeometryChange?: (regionId: string, next: AxisRect) => void;
   onRegionRemove?: (regionId: string) => void;
+  regionOverlaps?: RegionOverlapItem[];
+  onRemoveRegionOverlap?: (overlapId: string) => void;
   grabbedBoxes?: Array<{
     id: string;
     bounds: OverlayBounds;
@@ -622,6 +629,8 @@ export interface SelectionLabelProps {
   onShowContextMenu?: () => void;
   onHoverChange?: (isHovered: boolean) => void;
   hideArrow?: boolean;
+  regionOverlaps?: RegionOverlapItem[];
+  onRemoveRegionOverlap?: (overlapId: string) => void;
 }
 
 export interface SourceLocation extends SourceInfo {
@@ -759,6 +768,21 @@ export interface SelectionZoomImage {
   coordinate_frame: CoordinateFrame;
 }
 
+export interface RegionOverlapSnapshot {
+  label: string;
+  selector: string | null;
+  regionCoverage: number;
+  elementCoverage: number;
+}
+
+export interface RegionOverlapItem {
+  id: string;
+  label: string;
+  selector: string | null;
+  regionCoverage: number;
+  elementCoverage: number;
+}
+
 export interface RegionSelectionPayload {
   type: "region";
   id: string;
@@ -770,6 +794,7 @@ export interface RegionSelectionPayload {
   ancestorLabel: string | null;
   ancestorSelector: string | null;
   coordinateFrame: CoordinateFrame | null;
+  overlaps: RegionOverlapSnapshot[];
 }
 
 export interface ReactGrabEntry {

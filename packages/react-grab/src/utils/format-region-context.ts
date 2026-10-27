@@ -1,4 +1,4 @@
-import type { RegionDirection } from "./describe-region-layout.js";
+import type { RegionDirection, RegionLayoutCandidate } from "./describe-region-layout.js";
 import type { RegionLayout, RegionNeighbor } from "./describe-region-layout.js";
 import type { CoordinateFrame, RegionMeasurement } from "../types.js";
 import { formatCoordinateFrameText } from "./coordinate-frame.js";
@@ -23,6 +23,13 @@ export const formatRegionSizeLabel = (width: number, height: number): string =>
   `${Math.round(width)}×${Math.round(height)}`;
 
 const bracketLabel = (label: string): string => `<${label}>`;
+
+const coverageSuffix = (candidate: RegionLayoutCandidate): string => {
+  if (candidate.regionCoverage === undefined || candidate.elementCoverage === undefined) return "";
+  const regionPercent = Math.round(candidate.regionCoverage * 100);
+  const elementPercent = Math.round(candidate.elementCoverage * 100);
+  return ` region: ${regionPercent}% element: ${elementPercent}%`;
+};
 
 const roundRect = (rect: { x: number; y: number; width: number; height: number }): string =>
   `x=${Math.round(rect.x)} y=${Math.round(rect.y)} ${formatRegionSizeLabel(rect.width, rect.height)}`;
@@ -95,7 +102,7 @@ export const formatRegionContext = (input: RegionContextTextInput): string => {
     lines.push("intersects:");
     for (const candidate of layout.intersecting) {
       const selector = candidate.selector ? ` selector: ${candidate.selector}` : "";
-      lines.push(`  - ${bracketLabel(candidate.label)}${selector}`);
+      lines.push(`  - ${bracketLabel(candidate.label)}${selector}${coverageSuffix(candidate)}`);
     }
   }
 

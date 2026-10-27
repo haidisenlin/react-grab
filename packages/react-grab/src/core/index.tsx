@@ -53,11 +53,16 @@ import {
 } from "../utils/is-valid-grabbable-element.js";
 import { isRootElement } from "../utils/is-root-element.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
-import { getElementsInDrag } from "../utils/get-elements-in-drag.js";
+import { listRegionOverlaps } from "../utils/list-region-overlaps.js";
+import type { RegionOverlap } from "../utils/list-region-overlaps.js";
 import { getElementAnchorRatio } from "../utils/get-element-anchor-ratio.js";
 import { createElementBounds } from "../utils/create-element-bounds.js";
 import { invalidateInteractionCaches } from "../utils/invalidate-interaction-caches.js";
-import { refreshPointerEventsFreezeShields } from "../utils/pointer-events-freeze.js";
+import {
+  refreshPointerEventsFreezeShields,
+  resumePointerEventsFreeze,
+  suspendPointerEventsFreeze,
+} from "../utils/pointer-events-freeze.js";
 import { normalizeErrorMessage } from "../utils/normalize-error.js";
 import {
   createBoundsFromDragRect,
@@ -83,6 +88,7 @@ import {
   FEEDBACK_DURATION_MS,
   KEYDOWN_SPAM_TIMEOUT_MS,
   DRAG_THRESHOLD_PX,
+  REGION_MIN_SIZE_PX,
   ELEMENT_DETECTION_THROTTLE_MS,
   PENDING_DETECTION_STALENESS_MS,
   COMPONENT_NAME_DEBOUNCE_MS,
@@ -144,6 +150,7 @@ import type {
   DragRect,
   ElementLabelVariant,
   RegionAnchor,
+  RegionOverlapItem,
   RegionSelectionPayload,
   AxisRect,
 } from "../types.js";
@@ -551,19 +558,6 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           : Math.min(DRAG_PREVIEW_DEBOUNCE_MS, DRAG_PREVIEW_MAX_WAIT_MS - timeSinceLastUpdateMs),
       );
     };
-    const resolveDragSelectionAtRelease = (
-      dragSelectionRect: DragRect,
-      clientX: number,
-      clientY: number,
-    ): Element[] => {
-      cancelScheduledDragPreviewUpdate();
-      return getElementsInDrag(
-        dragSelectionRect,
-        { x: clientX, y: clientY },
-        isValidGrabbableElement,
-        false,
-      );
-    };
     const clearDragPreview = () => {
       cancelScheduledDragPreviewUpdate();
       lastDragPreviewUpdateTimestampMs = 0;
@@ -584,6 +578,10 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     };
     let previousSpaceDragPointerPage: Position | null = null;
     let shouldSuppressPageClick = false;
+    let isPagePassthrough = false;
+    const trackedOverlaps = new Map<string, { regionId: string; element: Element }>();
+    const removedOverlapElements = new Map<string, Element[]>();
+    const [regionOverlapItems, setRegionOverlapItems] = createSignal<RegionOverlapItem[]>([]);
     const [isShiftMultiSelecting, setIsShiftMultiSelecting] = createSignal(false);
     let lastWindowFocusTimestamp = 0;
     let isCopyFeedbackCooldownActive = false;
@@ -1053,7 +1051,10 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       if (regions.length === 0 || signal.aborted) return CANCELLED_COPY_RESULT;
       const builtRegions = await Promise.all(
         regions.map((region) =>
-          buildRegionContext({ ...region, note }, pluginRegistry.store.options.maxContextLines),
+          buildRegionContext(
+            { ...region, note, excludedElements: removedOverlapElements.get(region.id) },
+            pluginRegistry.store.options.maxContextLines,
+          ),
         ),
       );
       if (signal.aborted) return CANCELLED_COPY_RESULT;
@@ -1539,6 +1540,75 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     const isSpaceActivationKey = (event: KeyboardEvent) =>
       event.code === "Space" || event.key === " ";
 
+    const isHoldModeSpaceActivation = (): boolean => {
+      if (pluginRegistry.store.options.activationMode !== "hold") return false;
+      const activationKey = pluginRegistry.store.options.activationKey;
+      if (typeof activationKey !== "string") return false;
+      const normalized = activationKey.toLowerCase();
+      return normalized === " " || normalized === "space";
+    };
+
+    const beginPagePassthrough = () => {
+      if (isPagePassthrough) return;
+      isPagePassthrough = true;
+      suspendPointerEventsFreeze();
+    };
+
+    const endPagePassthrough = () => {
+      if (!isPagePassthrough) return;
+      isPagePassthrough = false;
+      resumePointerEventsFreeze();
+    };
+
+    const clearRegionOverlaps = () => {
+      trackedOverlaps.clear();
+      removedOverlapElements.clear();
+      setRegionOverlapItems([]);
+    };
+
+    const rememberRegionOverlaps = (
+      regionId: string,
+      overlaps: readonly RegionOverlap[],
+      shouldAccumulate: boolean,
+    ) => {
+      if (!shouldAccumulate) {
+        trackedOverlaps.clear();
+        removedOverlapElements.clear();
+      }
+      const nextItems: RegionOverlapItem[] = shouldAccumulate ? [...regionOverlapItems()] : [];
+      for (const overlap of overlaps) {
+        const overlapId = `${regionId}:${overlap.key}`;
+        trackedOverlaps.set(overlapId, { regionId, element: overlap.element });
+        nextItems.push({
+          id: overlapId,
+          label: overlap.label,
+          selector: overlap.selector,
+          regionCoverage: overlap.regionCoverage,
+          elementCoverage: overlap.elementCoverage,
+        });
+      }
+      setRegionOverlapItems(nextItems);
+    };
+
+    const removeRegionOverlap = (overlapId: string) => {
+      const tracked = trackedOverlaps.get(overlapId);
+      if (!tracked) return;
+      const removed = removedOverlapElements.get(tracked.regionId) ?? [];
+      removed.push(tracked.element);
+      removedOverlapElements.set(tracked.regionId, removed);
+      trackedOverlaps.delete(overlapId);
+      setRegionOverlapItems((previous) => previous.filter((item) => item.id !== overlapId));
+    };
+
+    const dropRegionOverlaps = (regionId: string) => {
+      removedOverlapElements.delete(regionId);
+      for (const [overlapId, tracked] of trackedOverlaps) {
+        if (tracked.regionId !== regionId) continue;
+        trackedOverlaps.delete(overlapId);
+      }
+      setRegionOverlapItems((previous) => previous.filter((item) => trackedOverlaps.has(item.id)));
+    };
+
     const startSpaceDragRepositioning = () => {
       if (!isDragging()) return;
       actions.startDragReposition();
@@ -1565,26 +1635,14 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       return createFlatOverlayBounds(drag);
     });
 
-    // Membership (which elements the marquee covers) is the expensive half:
-    // getElementsInDrag hit-tests up to ~100 sample points and validates every
-    // candidate. It must NOT subscribe to viewportVersion — the 100ms bounds
-    // interval bumps that signal while a drag is held still, which re-ran the
-    // full sampling pass per tick and saturated the main thread on dense DOMs.
-    // scrollVersion only changes on real scroll/resize, when content actually
-    // moves under the marquee.
+    // Selection-mode drags draw a region rectangle. Covered elements are listed
+    // after release, so this memo stays empty and must not sample the page.
     const dragPreviewElements = createMemo((): Element[] => {
       void scrollVersion();
-
       if (!isDraggingBeyondThreshold()) return [];
-
-      const pointer = dragPreviewPointer();
-      if (!pointer) return [];
-
-      const drag = calculateDragRectangle(pointer.x, pointer.y);
-      const computationStartTimestampMs = performance.now();
-      const elements = getElementsInDrag(drag, pointer, isValidGrabbableElement, false);
-      lastDragPreviewComputationDurationMs = performance.now() - computationStartTimestampMs;
-      return elements;
+      if (!dragPreviewPointer()) return [];
+      lastDragPreviewComputationDurationMs = 0;
+      return [];
     });
 
     const dragPreviewBounds = createMemo((): OverlayBounds[] => {
@@ -1953,6 +2011,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const wasDragging = isDragging();
       const previousFocused = store.previouslyFocusedElement;
       stopSpaceDragRepositioning();
+      endPagePassthrough();
+      clearRegionOverlaps();
       actions.deactivate();
       selectionImages.releaseFrame();
       dismissToolbarMenu();
@@ -2405,6 +2465,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     };
 
     const removeRegion = (regionId: string) => {
+      dropRegionOverlaps(regionId);
       actions.removeFrozenRegion(regionId);
       if (store.frozenRegions.length === 0) {
         deactivateRenderer();
@@ -2415,8 +2476,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       dragSelectionRect: DragRect,
       isShiftHeld: boolean,
       anchor: RegionAnchor,
+      overlaps: readonly RegionOverlap[],
     ) => {
-      if (isShiftHeld && store.frozenElements.length > 0) return;
       const region = {
         id: generateId("region"),
         anchor,
@@ -2427,6 +2488,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       };
       const shouldAccumulate =
         isShiftHeld && !store.pendingCommentMode && !isPendingContextMenuSelect();
+      rememberRegionOverlaps(region.id, overlaps, shouldAccumulate);
       if (shouldAccumulate) {
         actions.addFrozenRegion(region);
         setIsShiftMultiSelecting(true);
@@ -2441,77 +2503,20 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
 
     const handleDragSelection = (
       dragSelectionRect: ReturnType<typeof calculateDragRectangle>,
-      selectedElements: Element[],
-      hasModifierKeyHeld: boolean,
       isShiftHeld: boolean,
       dragAnchor: RegionAnchor,
     ) => {
-      if (selectedElements.length === 0) {
-        commitEmptyDragAsRegion(dragSelectionRect, isShiftHeld, dragAnchor);
-        return;
-      }
-
-      const isShiftAccumulating =
-        isShiftHeld && !store.pendingCommentMode && !isPendingContextMenuSelect();
-
-      // In the shift-accumulating branch we must freeze on the COMBINED set
-      // (prior accumulated + newly dragged), because freezeAllAnimations
-      // unfreezes its prior input via finishAnimations() — which permanently
-      // advances WAAPI animations on previously selected elements past the
-      // freeze point. Calling it once with [...prior, ...new] keeps prior
-      // animations paused.
-      if (isShiftAccumulating) {
-        actions.addFrozenElements(selectedElements);
-      }
-      freezeAllAnimations(isShiftAccumulating ? store.frozenElements : selectedElements);
-
-      pluginRegistry.hooks.onDragEnd(selectedElements, dragSelectionRect);
-
-      if (isShiftAccumulating) {
-        const lastElement = selectedElements[selectedElements.length - 1];
-        setIsShiftMultiSelecting(true);
-        clearElementPositionCache();
-        actions.setPointer(getBoundsCenter(createElementBounds(lastElement)));
-        actions.setLastGrabbed(lastElement);
-        actions.freeze();
-        clearKeyboardNavigation();
-        return;
-      }
-
-      const firstElement = selectedElements[0];
-      const center = getBoundsCenter(createElementBounds(firstElement));
-
-      actions.setPointer(center);
-      actions.setFrozenElements(selectedElements);
-      const dragRect = createPageRectFromBounds(dragSelectionRect);
-      actions.setFrozenDragRect(dragRect);
-      actions.freeze();
-      actions.setLastGrabbed(firstElement);
-
-      if (store.pendingCommentMode) {
-        enterCommentModeForElement(firstElement, center.x, center.y);
-        return;
-      }
-
-      if (isPendingContextMenuSelect()) {
-        setIsPendingContextMenuSelect(false);
-        if (pendingDefaultActionId) {
-          runPendingDefaultAction(firstElement, center);
-        } else {
-          openContextMenu(firstElement, center);
-        }
-        return;
-      }
-
-      const shouldDeactivateAfter = store.wasActivatedByToggle && !hasModifierKeyHeld;
-
-      performCopyWithLabel({
-        element: firstElement,
-        cursorX: center.x,
-        selectedElements,
-        shouldDeactivateAfter,
-        dragRect,
+      const overlaps = listRegionOverlaps({
+        x: dragSelectionRect.x,
+        y: dragSelectionRect.y,
+        width: dragSelectionRect.width,
+        height: dragSelectionRect.height,
       });
+      pluginRegistry.hooks.onDragEnd(
+        overlaps.map((overlap) => overlap.element),
+        dragSelectionRect,
+      );
+      commitEmptyDragAsRegion(dragSelectionRect, isShiftHeld, dragAnchor, overlaps);
     };
 
     const getFrozenElementAtPosition = (position: Position): Element | null => {
@@ -2650,9 +2655,6 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       // The rectangle needs to be calculated before endDrag() because endDrag
       // resets dragStart in the store, which would zero out the rectangle.
       const dragSelectionRect = wasDragGesture ? calculateDragRectangle(clientX, clientY) : null;
-      const dragSelectionElements = dragSelectionRect
-        ? resolveDragSelectionAtRelease(dragSelectionRect, clientX, clientY)
-        : [];
 
       clearDragPreview();
 
@@ -2665,15 +2667,13 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       autoScroller.stop();
       restoreHostBodyStyle("userSelect");
 
-      if (dragSelectionRect) {
-        handleDragSelection(
-          dragSelectionRect,
-          dragSelectionElements,
-          hasModifierKeyHeld,
-          isShiftHeld,
-          dragAnchor,
-        );
-      } else {
+      const isAccidentalRegion =
+        dragSelectionRect !== null &&
+        dragSelectionRect.width < REGION_MIN_SIZE_PX &&
+        dragSelectionRect.height < REGION_MIN_SIZE_PX;
+      if (dragSelectionRect && !isAccidentalRegion) {
+        handleDragSelection(dragSelectionRect, isShiftHeld, dragAnchor);
+      } else if (!dragSelectionRect) {
         handleSingleClick(clientX, clientY, hasModifierKeyHeld, isShiftHeld);
       }
     };
@@ -3162,13 +3162,22 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           return;
         }
 
-        if (isDragging() && isSpaceActivationKey(event)) {
-          if (!event.repeat) {
-            startSpaceDragRepositioning();
+        if (isActivated() && isSpaceActivationKey(event)) {
+          if (isHoldModeSpaceActivation()) {
+            if (isDragging()) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+          } else {
+            if (!event.repeat) {
+              if (isDragging()) cancelActiveDrag();
+              beginPagePassthrough();
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            return;
           }
-          event.preventDefault();
-          event.stopPropagation();
-          return;
         }
 
         if (event.key === "Escape") {
@@ -3203,6 +3212,13 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       "keyup",
       ignoreRealInput((event: KeyboardEvent) => {
         if (blockEnterIfNeeded(event)) return;
+
+        if (isSpaceActivationKey(event) && isPagePassthrough) {
+          endPagePassthrough();
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
 
         if (isSpaceActivationKey(event) && isDragRepositioning()) {
           stopSpaceDragRepositioning();
@@ -3327,6 +3343,10 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       { capture: true },
     );
 
+    eventListenerManager.addWindowListener("blur", () => {
+      endPagePassthrough();
+    });
+
     eventListenerManager.addDocumentListener("copy", () => {
       if (isHoldingKeys()) {
         activationHoldState.copyWaiting = true;
@@ -3341,6 +3361,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       "pointermove",
       ignoreRealInput((event: PointerEvent) => {
         if (!event.isPrimary) return;
+        if (isPagePassthrough) return;
         const isTouchPointer = event.pointerType === "touch";
         actions.setTouchMode(isTouchPointer);
         if (isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
@@ -3379,6 +3400,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       ignoreRealInput((event: PointerEvent) => {
         if (event.button !== 0) return;
         if (!event.isPrimary) return;
+        if (isPagePassthrough) return;
         actions.setTouchMode(event.pointerType === "touch");
         if (!isDragging() && isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
         if (isModalPopoverOpen()) return;
@@ -3439,6 +3461,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       ignoreRealInput((event: PointerEvent) => {
         if (event.button !== 0) return;
         if (!event.isPrimary) return;
+        if (isPagePassthrough) return;
         if (isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
         if (isModalPopoverOpen()) return;
         const isActive = isRendererActive() || isSelectionInteractionLocked() || isDragging();
@@ -3460,6 +3483,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     eventListenerManager.addWindowListener(
       "contextmenu",
       ignoreRealInput((event: MouseEvent) => {
+        if (isPagePassthrough) return;
         if (!isRendererActive() || isCopying() || isPromptMode()) return;
         const isFromOverlay = isEventFromOverlay(event, "data-react-grab-ignore-events");
         const position = { x: event.clientX, y: event.clientY };
@@ -3520,6 +3544,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       if (isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
       if (isModalPopoverOpen()) return;
 
+      if (isPagePassthrough) return;
       const shouldBlockPageClick =
         shouldSuppressPageClick || isRendererActive() || isCopying() || didJustDrag();
       if (!shouldBlockPageClick) return;
@@ -4448,6 +4473,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
                   actions.updateFrozenRegion(regionId, next);
                 }}
                 onRegionRemove={removeRegion}
+                regionOverlaps={regionOverlapItems()}
+                onRemoveRegionOverlap={removeRegionOverlap}
                 grabbedBoxes={computedGrabbedBoxes()}
                 mouseX={
                   store.frozenElements.length > 1
