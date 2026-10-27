@@ -165,8 +165,12 @@ test.describe("Generic hit testing", () => {
         if (element.namespaceURI === "http://www.w3.org/2000/svg") {
           return element instanceof SVGTextContentElement && Boolean(element.textContent?.trim());
         }
-        if (boxRoles.has(element.getAttribute("role") ?? "") || element.isContentEditable)
+        if (
+          boxRoles.has(element.getAttribute("role") ?? "") ||
+          (element instanceof HTMLElement && element.isContentEditable)
+        ) {
           return true;
+        }
         const style = getComputedStyle(element);
         const borderPaints =
           (style.borderTopStyle !== "none" && style.borderTopWidth !== "0px") ||

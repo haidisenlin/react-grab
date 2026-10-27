@@ -33,6 +33,12 @@ Region at x=62%, y=40% (320×180) — empty space below <ProjectCard> and left o
 
 Copied element and region context includes a one-line coordinate summary such as `viewport 1440×900 css px, DPR 2, zoom ~100%`, then viewport size, visual viewport scale and offset, document scroll, device pixel ratio, an estimated browser zoom, scroll containers, and ancestor CSS transforms with the region in screen pixels and untransformed local pixels. The zoom figure is an estimate from the layout viewport versus `visualViewport` (`devicePixelRatio` is reported separately). Screenshots taken in selection mode add a numbered overview plus zoomed crops, each labeled with the CSS rectangle it covers and a scale where `css = origin + px/scale`. Sensitive nodes can opt out with `data-react-grab-mask`.
 
+A plain `<script>` page does not bundle the screenshot engines. Load `dist/index.global.js` and React Grab will request `dist/capture.global.js` from the same directory. That file bundles snapDOM and the html-to-image fallback. To host the capture build somewhere else, set `window.__REACT_GRAB_CAPTURE_SRC__` before `index.global.js`, or put `data-react-grab-capture-src` on the React Grab script tag. Including `capture.global.js` yourself also works.
+
+```html
+<script src="https://unpkg.com/react-grab/dist/index.global.js" crossorigin="anonymous"></script>
+```
+
 The copied context includes the selected element and its component stack with source locations:
 
 ```txt

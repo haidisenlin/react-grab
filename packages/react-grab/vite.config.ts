@@ -73,6 +73,26 @@ const makeIifePack = (entry: string, globalName: string, isDemo: boolean): PackU
   plugins: [solidWebBrowserPlugin(), cssTextPlugin(), createSolidBabelPlugin()],
 });
 
+const makeCapturePack = (): PackUserConfig => ({
+  entry: ["./src/capture-plugin.ts"],
+  format: ["iife"],
+  globalName: "globalThis.__REACT_GRAB_CAPTURE_MODULE__",
+  dts: false,
+  clean: false,
+  platform: "browser",
+  sourcemap: false,
+  minify: process.env.NODE_ENV === "production",
+  banner: licenseBanner,
+  outputOptions: {
+    entryFileNames: "capture.global.js",
+  },
+  define: createDefine(false),
+  deps: {
+    alwaysBundle: [...alwaysBundle, /^@zumer\/snapdom/, /^html-to-image/, /^tslib/],
+  },
+  plugins: [solidWebBrowserPlugin(), cssTextPlugin(), createSolidBabelPlugin()],
+});
+
 const makeModulePack = (entry: string[], isDemo: boolean): PackUserConfig => ({
   entry,
   format: ["cjs", "esm"],
@@ -95,6 +115,7 @@ const includeDemoBuild = process.env.IS_DEMO === "true";
 export default defineConfig({
   pack: [
     makeIifePack("./src/index.ts", "globalThis.__REACT_GRAB_MODULE__", false),
+    makeCapturePack(),
     makeModulePack(["./src/index.ts", "./src/core/index.tsx", "./src/primitives.ts"], false),
     ...(includeDemoBuild
       ? [

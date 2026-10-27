@@ -7,6 +7,7 @@ import {
 } from "../constants.js";
 import type { AxisRect } from "../types.js";
 import { isReactGrabElement } from "./is-react-grab-element.js";
+import { loadCapturePlugin, readCapturePlugin } from "./load-capture-plugin.js";
 import { REACT_GRAB_ATTRIBUTE_NAME } from "./react-grab-attribute-name.js";
 import { readVisibleViewportRect } from "./read-coordinate-frame.js";
 
@@ -161,11 +162,27 @@ export const captureViewportFrame = async (): Promise<ViewportFrame | null> => {
   const signature = viewportSignature();
   const hiddenUi = hideGrabUi();
   try {
-    const canvas = await withTimeout(
+    const bundledCanvas = await withTimeout(
       (async () =>
         (await captureWithSnapdom(devicePixelRatio)) ??
         (await captureWithHtmlToImage(devicePixelRatio, cssRect)))(),
     );
+    const plugin = bundledCanvas
+      ? null
+      : (readCapturePlugin() ?? ((await loadCapturePlugin()) ? readCapturePlugin() : null));
+    const canvas =
+      bundledCanvas ??
+      (plugin
+        ? await withTimeout(
+            (async () =>
+              (await plugin.captureWithSnapdom(devicePixelRatio)) ??
+              (await plugin.captureWithHtmlToImage(
+                devicePixelRatio,
+                cssRect.width,
+                cssRect.height,
+              )))(),
+          )
+        : null);
     if (!canvas) return null;
     blurMaskedElements(canvas, cssRect);
     return { canvas, cssRect, devicePixelRatio, signature };
