@@ -46,7 +46,6 @@ import { runCopyFlow, type CopyFlowResult } from "./copy.js";
 import {
   clearElementPositionCache,
   getElementAtPosition,
-  getElementsAtPoint,
 } from "../utils/get-element-at-position.js";
 import {
   clearVisibilityCache,
@@ -65,6 +64,16 @@ import {
   createFlatOverlayBounds,
   createPageRectFromBounds,
 } from "../utils/create-bounds-from-drag-rect.js";
+import { createRegionViewportBounds } from "../utils/create-region-viewport-bounds.js";
+import { buildRegionContext } from "../utils/build-region-context.js";
+import {
+  createSelectionImageSession,
+  elementSelectionTargets,
+  formatSelectionImageLines,
+  regionSelectionTargets,
+} from "./selection-images.js";
+import { findViewportPositionedAncestor } from "../utils/find-viewport-positioned-ancestor.js";
+import { formatRegionSizeLabel } from "../utils/format-region-context.js";
 import { getTagName } from "../utils/get-tag-name.js";
 import { buildElementHierarchy } from "../utils/build-element-hierarchy.js";
 import { isHorizontallyGrabbable } from "../utils/is-horizontally-grabbable.js";
@@ -134,6 +143,9 @@ import type {
   DropdownAnchor,
   DragRect,
   ElementLabelVariant,
+  RegionAnchor,
+  RegionSelectionPayload,
+  AxisRect,
 } from "../types.js";
 import { createPluginRegistry } from "./plugin-registry.js";
 import { createLabelController } from "./label-controller.js";
@@ -549,6 +561,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         dragSelectionRect,
         { x: clientX, y: clientY },
         isValidGrabbableElement,
+        false,
       );
     };
     const clearDragPreview = () => {
@@ -570,6 +583,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       holdTimerFired: false,
     };
     let previousSpaceDragPointerPage: Position | null = null;
+    let shouldSuppressPageClick = false;
     const [isShiftMultiSelecting, setIsShiftMultiSelecting] = createSignal(false);
     let lastWindowFocusTimestamp = 0;
     let isCopyFeedbackCooldownActive = false;
@@ -623,7 +637,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       pointer,
       () => isDragging(),
       (scrollDelta) => {
-        if (isDragRepositioning()) {
+        if (isDragRepositioning() && store.dragAnchor !== "viewport") {
           actions.shiftDragStart(scrollDelta);
           if (previousSpaceDragPointerPage) {
             previousSpaceDragPointerPage = {
@@ -878,11 +892,30 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       labelController.dismissInstance(instanceId);
     };
 
+    const selectionImages = createSelectionImageSession();
+
+    const attachSelectionImages = async (
+      targets: ReturnType<typeof elementSelectionTargets>,
+    ): Promise<{ appendText?: string; overviewImage: Blob | null }> => {
+      if (IS_DEMO || targets.length === 0) return { overviewImage: null };
+      const images = await selectionImages.render(targets);
+      if (!images) return { overviewImage: null };
+      pluginRegistry.hooks.onSelectionImages(images);
+      return {
+        appendText: formatSelectionImageLines(images),
+        overviewImage: images.overview.blob,
+      };
+    };
+
     const copyResolvedElements = (
       elements: Element[],
       signal: AbortSignal,
       extraPrompt?: string,
       resolvedComponentName?: string,
+      imageAttachment: Promise<{
+        appendText?: string;
+        overviewImage: Blob | null;
+      } | null> = Promise.resolve(null),
     ) => {
       const firstElement = elements[0];
       const componentName =
@@ -896,6 +929,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           componentName: elementName,
           maxContextLines: pluginRegistry.store.options.maxContextLines,
           signal,
+          imageAttachment,
         },
         pluginRegistry.hooks,
         elements,
@@ -925,6 +959,10 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           showTemporaryGrabbedBox(createElementBounds(element), element);
         }
       }
+      const imageAttachment =
+        unhandledElements.length > 0 && !signal.aborted
+          ? attachSelectionImages(elementSelectionTargets(unhandledElements))
+          : Promise.resolve(null);
       await waitUntilNextFrame();
       if (signal.aborted) return CANCELLED_COPY_RESULT;
 
@@ -935,6 +973,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           signal,
           extraPrompt,
           resolvedComponentName,
+          imageAttachment,
         );
         if (copyResult.status === "cancelled") return copyResult;
       }
@@ -954,6 +993,122 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         );
       });
       return copyResult ?? { status: "succeeded" };
+    };
+
+    const rememberRegionSource = (element: Element | null) => {
+      const currentVersion = ++selectionSourceRequestVersion;
+      if (!element) return;
+      resolveSource(element)
+        .then((source) => {
+          if (selectionSourceRequestVersion !== currentVersion) return;
+          if (!source?.filePath) return;
+          actions.setSelectionSource(source.filePath, source.lineNumber);
+        })
+        .catch((error) => {
+          reportRecoverableError(new RecoverableError("Region source resolution failed", error));
+        });
+    };
+
+    const publishRegionSelection = async (
+      regions: Array<{
+        id: string;
+        anchor: RegionAnchor;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }>,
+    ) => {
+      const payloads: RegionSelectionPayload[] = [];
+      let ancestorElement: Element | null = null;
+      for (const region of regions) {
+        try {
+          const built = await buildRegionContext(
+            region,
+            pluginRegistry.store.options.maxContextLines,
+          );
+          payloads.push(built.payload);
+          ancestorElement = ancestorElement ?? built.ancestorElement;
+          pluginRegistry.hooks.onRegionSelect(built.payload);
+        } catch (error) {
+          reportRecoverableError(
+            new RecoverableError("Region selection notification failed", error),
+          );
+        }
+      }
+      if (payloads.length === 0) return;
+      rememberRegionSource(ancestorElement);
+      window.dispatchEvent(
+        new CustomEvent("react-grab:region-selected", {
+          detail: { type: "region", regions: payloads },
+        }),
+      );
+    };
+
+    const copyRegionsToClipboard = async (
+      note: string,
+      signal: AbortSignal,
+    ): Promise<CopyFlowResult> => {
+      const regions = [...store.frozenRegions];
+      if (regions.length === 0 || signal.aborted) return CANCELLED_COPY_RESULT;
+      const builtRegions = await Promise.all(
+        regions.map((region) =>
+          buildRegionContext({ ...region, note }, pluginRegistry.store.options.maxContextLines),
+        ),
+      );
+      if (signal.aborted) return CANCELLED_COPY_RESULT;
+      const content = builtRegions.map((built) => built.text).join("\n\n");
+      const ancestorElements = builtRegions.flatMap((built) =>
+        built.ancestorElement ? [built.ancestorElement] : [],
+      );
+      const imageAttachment = attachSelectionImages(
+        regionSelectionTargets(
+          regions.map((region, index) => ({
+            id: region.id,
+            screenRect: (() => {
+              const bounds = createRegionViewportBounds(region);
+              return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+            })(),
+            element: builtRegions[index]?.ancestorElement ?? null,
+          })),
+        ),
+      );
+      return runCopyFlow(
+        {
+          getPayload: () => ({
+            content,
+            entries: builtRegions.map((built) => ({
+              type: "region" as const,
+              componentName: "Region",
+              content: built.text,
+              commentText: note || undefined,
+              region: built.payload,
+              coordinateFrame: built.payload.coordinateFrame,
+            })),
+          }),
+          imageAttachment,
+          componentName: "Region",
+          maxContextLines: pluginRegistry.store.options.maxContextLines,
+          signal,
+        },
+        pluginRegistry.hooks,
+        ancestorElements,
+      );
+    };
+
+    const performRegionCopy = (note: string) => {
+      const regions = store.frozenRegions;
+      if (regions.length === 0) return;
+      const boundsList = regions.map((region) => createRegionViewportBounds(region));
+      const firstBounds = boundsList[0];
+      if (!firstBounds) return;
+      const unionBounds =
+        boundsList.length === 1 ? firstBounds : createFlatOverlayBounds(combineBounds(boundsList));
+      const labelId = labelController.createInstance(unionBounds, "region", "Region", "copying", {
+        boundsMultiple: boundsList.length > 1 ? boundsList : undefined,
+        hideArrow: true,
+      });
+      void executeCopyOperation((signal) => copyRegionsToClipboard(note, signal), [labelId], true);
     };
 
     const runLabeledCopy = (copy: LabeledCopyOptions) => {
@@ -1309,6 +1464,15 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       void viewportVersion();
 
       const frozenElements = store.frozenElements;
+      if (store.frozenRegions.length > 0 && frozenElements.length === 0) {
+        void viewportVersion();
+        const regionBounds = store.frozenRegions.map((region) =>
+          createRegionViewportBounds(region),
+        );
+        if (regionBounds.length === 1) return regionBounds[0];
+        return createFlatOverlayBounds(combineBounds(regionBounds));
+      }
+
       if (frozenElements.length > 0) {
         const frozenBounds = frozenElementsBounds();
         if (frozenElements.length === 1) {
@@ -1334,6 +1498,12 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     });
 
     const calculateDragDistance = (endX: number, endY: number) => {
+      if (store.dragAnchor === "viewport") {
+        return {
+          x: Math.abs(endX - store.dragStart.x),
+          y: Math.abs(endY - store.dragStart.y),
+        };
+      }
       const { pageX: endPageX, pageY: endPageY } = toPageCoordinates(endX, endY);
 
       return {
@@ -1343,6 +1513,14 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     };
 
     const calculateDragRectangle = (endX: number, endY: number) => {
+      if (store.dragAnchor === "viewport") {
+        return {
+          x: Math.min(store.dragStart.x, endX),
+          y: Math.min(store.dragStart.y, endY),
+          width: Math.abs(endX - store.dragStart.x),
+          height: Math.abs(endY - store.dragStart.y),
+        };
+      }
       const { pageX: endPageX, pageY: endPageY } = toPageCoordinates(endX, endY);
 
       const dragPageX = Math.min(store.dragStart.x, endPageX);
@@ -1364,6 +1542,10 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     const startSpaceDragRepositioning = () => {
       if (!isDragging()) return;
       actions.startDragReposition();
+      if (store.dragAnchor === "viewport") {
+        previousSpaceDragPointerPage = { x: pointer().x, y: pointer().y };
+        return;
+      }
       const { pageX, pageY } = toPageCoordinates(pointer().x, pointer().y);
       previousSpaceDragPointerPage = { x: pageX, y: pageY };
     };
@@ -1400,7 +1582,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
 
       const drag = calculateDragRectangle(pointer.x, pointer.y);
       const computationStartTimestampMs = performance.now();
-      const elements = getElementsInDrag(drag, pointer, isValidGrabbableElement);
+      const elements = getElementsInDrag(drag, pointer, isValidGrabbableElement, false);
       lastDragPreviewComputationDurationMs = performance.now() - computationStartTimestampMs;
       return elements;
     });
@@ -1419,7 +1601,13 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       if (pendingBounds) {
         return [...frozenElementsBounds(), pendingBounds];
       }
-      return frozenElementsBounds();
+      const frozenBounds = frozenElementsBounds();
+      if (frozenBounds.length > 0) return frozenBounds;
+      if (store.frozenRegions.length > 1) {
+        void viewportVersion();
+        return store.frozenRegions.map((region) => createRegionViewportBounds(region));
+      }
+      return [];
     });
 
     const allFrozenLabelEntryAccessors = mapArray(
@@ -1516,6 +1704,9 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       on(
         () => targetElement(),
         (element) => {
+          if (untrack(() => store.frozenRegions.length > 0 && store.frozenElements.length === 0)) {
+            return;
+          }
           const currentVersion = ++selectionSourceRequestVersion;
 
           const clearSource = () => {
@@ -1565,6 +1756,36 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       })),
     );
 
+    const readRegionState = () =>
+      store.frozenRegions.map((region) => {
+        const viewportBounds = createRegionViewportBounds(region);
+        const pageBounds =
+          region.anchor === "page"
+            ? {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+              }
+            : {
+                x: region.x + window.scrollX,
+                y: region.y + window.scrollY,
+                width: region.width,
+                height: region.height,
+              };
+        return {
+          id: region.id,
+          anchor: region.anchor,
+          bounds: {
+            x: viewportBounds.x,
+            y: viewportBounds.y,
+            width: viewportBounds.width,
+            height: viewportBounds.height,
+          },
+          pageBounds,
+        };
+      });
+
     const derivedStateForHook = createMemo(() => {
       const active = isActivated();
       const dragging = isDragging();
@@ -1579,6 +1800,9 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const effectiveTarget = effectiveElement();
       const justCopied = didJustCopy();
 
+      const hasCommittedRegions =
+        store.frozenRegions.length > 0 && store.frozenElements.length === 0;
+      if (hasCommittedRegions) void viewportVersion();
       const isSelectionBoxVisible = Boolean(
         themeEnabled &&
         selectionBoxEnabled &&
@@ -1586,7 +1810,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         !copying &&
         !justCopied &&
         !dragging &&
-        effectiveTarget != null,
+        (effectiveTarget != null || hasCommittedRegions),
       );
       const isDragBoxVisible = Boolean(
         themeEnabled && dragBoxEnabled && active && !copying && draggingBeyondThreshold,
@@ -1605,6 +1829,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         labelInstances: [...publicLabelInstances()],
         selectionFilePath: store.selectionFilePath,
         toolbarState: currentToolbarState(),
+        regions: readRegionState(),
       };
     });
 
@@ -1717,6 +1942,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     const activateRenderer = () => {
       const wasInHoldingState = isHoldingKeys();
       actions.activate();
+      if (!IS_DEMO) void selectionImages.capture();
       if (!wasInHoldingState) {
         pluginRegistry.hooks.onActivate();
       }
@@ -1728,6 +1954,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const previousFocused = store.previouslyFocusedElement;
       stopSpaceDragRepositioning();
       actions.deactivate();
+      selectionImages.releaseFrame();
       dismissToolbarMenu();
       stopShiftMultiSelecting();
       clearKeyboardNavigation();
@@ -1779,6 +2006,13 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const frozenElements = [...store.frozenElements];
       const element = store.frozenElement || targetElement();
       const prompt = isPromptMode() ? store.inputText.trim() : "";
+
+      if (store.frozenRegions.length > 0 && frozenElements.length === 0) {
+        actions.exitPromptMode();
+        actions.clearInputText();
+        performRegionCopy(prompt);
+        return;
+      }
 
       if (!element) {
         deactivateRenderer();
@@ -2022,14 +2256,24 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
 
       if (isDragging()) {
         if (isDragRepositioning()) {
-          const { pageX, pageY } = toPageCoordinates(clientX, clientY);
-          if (previousSpaceDragPointerPage) {
-            actions.shiftDragStart({
-              x: pageX - previousSpaceDragPointerPage.x,
-              y: pageY - previousSpaceDragPointerPage.y,
-            });
+          if (store.dragAnchor === "viewport") {
+            if (previousSpaceDragPointerPage) {
+              actions.shiftDragStart({
+                x: clientX - previousSpaceDragPointerPage.x,
+                y: clientY - previousSpaceDragPointerPage.y,
+              });
+            }
+            previousSpaceDragPointerPage = { x: clientX, y: clientY };
+          } else {
+            const { pageX, pageY } = toPageCoordinates(clientX, clientY);
+            if (previousSpaceDragPointerPage) {
+              actions.shiftDragStart({
+                x: pageX - previousSpaceDragPointerPage.x,
+                y: pageY - previousSpaceDragPointerPage.y,
+              });
+            }
+            previousSpaceDragPointerPage = { x: pageX, y: pageY };
           }
-          previousSpaceDragPointerPage = { x: pageX, y: pageY };
         }
 
         scheduleDragPreviewUpdate(clientX, clientY);
@@ -2053,7 +2297,14 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       }
 
       const shouldPreserveKeyboardSelection = keyboardSelection.selectedElement() !== null;
-      actions.startDrag({ x: clientX, y: clientY }, isShiftHeld || shouldPreserveKeyboardSelection);
+      const hitElement = getElementAtPosition(clientX, clientY);
+      const dragAnchor: RegionAnchor =
+        hitElement && findViewportPositionedAncestor(hitElement) ? "viewport" : "page";
+      actions.startDrag(
+        { x: clientX, y: clientY },
+        isShiftHeld || shouldPreserveKeyboardSelection,
+        dragAnchor,
+      );
       actions.setPointer({ x: clientX, y: clientY });
       setHostBodyStyle("userSelect", "none");
 
@@ -2147,13 +2398,58 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       });
     };
 
+    const openRegionPrompt = (position: Position) => {
+      clearPendingToolbarSelection();
+      actions.clearInputText();
+      actions.enterRegionPrompt(position);
+    };
+
+    const removeRegion = (regionId: string) => {
+      actions.removeFrozenRegion(regionId);
+      if (store.frozenRegions.length === 0) {
+        deactivateRenderer();
+      }
+    };
+
+    const commitEmptyDragAsRegion = (
+      dragSelectionRect: DragRect,
+      isShiftHeld: boolean,
+      anchor: RegionAnchor,
+    ) => {
+      if (isShiftHeld && store.frozenElements.length > 0) return;
+      const region = {
+        id: generateId("region"),
+        anchor,
+        x: anchor === "viewport" ? dragSelectionRect.x : dragSelectionRect.x + window.scrollX,
+        y: anchor === "viewport" ? dragSelectionRect.y : dragSelectionRect.y + window.scrollY,
+        width: dragSelectionRect.width,
+        height: dragSelectionRect.height,
+      };
+      const shouldAccumulate =
+        isShiftHeld && !store.pendingCommentMode && !isPendingContextMenuSelect();
+      if (shouldAccumulate) {
+        actions.addFrozenRegion(region);
+        setIsShiftMultiSelecting(true);
+        actions.freezePhase();
+      } else {
+        actions.setFrozenRegions([region]);
+        setIsShiftMultiSelecting(false);
+        openRegionPrompt(getBoundsCenter(createRegionViewportBounds(region)));
+      }
+      void publishRegionSelection([region]);
+    };
+
     const handleDragSelection = (
       dragSelectionRect: ReturnType<typeof calculateDragRectangle>,
       selectedElements: Element[],
       hasModifierKeyHeld: boolean,
       isShiftHeld: boolean,
+      dragAnchor: RegionAnchor,
     ) => {
-      if (selectedElements.length === 0) return;
+      if (selectedElements.length === 0) {
+        commitEmptyDragAsRegion(dragSelectionRect, isShiftHeld, dragAnchor);
+        return;
+      }
 
       const isShiftAccumulating =
         isShiftHeld && !store.pendingCommentMode && !isPendingContextMenuSelect();
@@ -2246,8 +2542,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       // fast click before the detection rAF flushes) then selects a stale
       // element. The hit-test is the only reliable read of the click target, so
       // both single-select and Shift multi-select use it.
-      const liveElementAtPointer = (): Element | null =>
-        getElementsAtPoint(clientX, clientY).find(isValidGrabbableElement) ?? null;
+      const liveElementAtPointer = (): Element | null => getElementAtPosition(clientX, clientY);
 
       // While Shift is held we only operate on the live element under the
       // pointer. Falling through to the non-shift path would let the
@@ -2350,6 +2645,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const dragDistance = calculateDragDistance(clientX, clientY);
       const wasDragGesture =
         dragDistance.x > DRAG_THRESHOLD_PX || dragDistance.y > DRAG_THRESHOLD_PX;
+      const dragAnchor = store.dragAnchor;
 
       // The rectangle needs to be calculated before endDrag() because endDrag
       // resets dragStart in the store, which would zero out the rectangle.
@@ -2375,6 +2671,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           dragSelectionElements,
           hasModifierKeyHeld,
           isShiftHeld,
+          dragAnchor,
         );
       } else {
         handleSingleClick(clientX, clientY, hasModifierKeyHeld, isShiftHeld);
@@ -2833,6 +3130,20 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         const isFromOverlay =
           isEventFromOverlay(event, "data-react-grab-ignore-events") && !isEnterToActivateInput;
 
+        if (
+          isPromptMode() &&
+          store.frozenRegions.length > 0 &&
+          store.frozenElements.length === 0 &&
+          store.inputText.length === 0 &&
+          (event.key === "Backspace" || event.key === "Delete")
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const lastRegion = store.frozenRegions[store.frozenRegions.length - 1];
+          if (lastRegion) removeRegion(lastRegion.id);
+          return;
+        }
+
         if (isPromptMode() || isFromOverlay) {
           if (isPromptMode() && !isFromReactGrabInput && tryHandleBareKeyShortcut(event)) return;
 
@@ -2908,6 +3219,14 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           // cleanup.
           if (isDragging()) {
             cancelActiveDrag();
+          }
+          if (store.frozenRegions.length > 0 && store.frozenElements.length === 0) {
+            const lastRegion = store.frozenRegions[store.frozenRegions.length - 1];
+            stopShiftMultiSelecting();
+            if (lastRegion) {
+              openRegionPrompt(getBoundsCenter(createRegionViewportBounds(lastRegion)));
+            }
+            return;
           }
           commitShiftMultiSelection();
           return;
@@ -3073,11 +3392,14 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
             event.clientY >= bounds.y &&
             event.clientY <= bounds.y + bounds.height;
 
+          shouldSuppressPageClick = true;
           if (isClickOnSelection) {
             void handleInputSubmit();
           } else {
             handleInputCancel();
           }
+          event.preventDefault();
+          event.stopImmediatePropagation();
           return;
         }
 
@@ -3095,6 +3417,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
 
         const didHandle = handlePointerDown(event.clientX, event.clientY, event.shiftKey);
         if (didHandle) {
+          shouldSuppressPageClick = true;
           if (event.pointerId !== undefined) {
             // setPointerCapture throws NotFoundError for inactive pointer ids
             // (synthetic events, some Firefox touch paths); a throw here would
@@ -3121,6 +3444,11 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         const isActive = isRendererActive() || isSelectionInteractionLocked() || isDragging();
         const hasModifierKeyHeld = event.metaKey || event.ctrlKey;
         handlePointerUp(event.clientX, event.clientY, hasModifierKeyHeld, event.shiftKey);
+        if (shouldSuppressPageClick) {
+          window.setTimeout(() => {
+            shouldSuppressPageClick = false;
+          }, 0);
+        }
         if (isActive) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -3188,24 +3516,40 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       { capture: true },
     );
 
+    const suppressPageActivation = (event: MouseEvent) => {
+      if (isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
+      if (isModalPopoverOpen()) return;
+
+      const shouldBlockPageClick =
+        shouldSuppressPageClick || isRendererActive() || isCopying() || didJustDrag();
+      if (!shouldBlockPageClick) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      shouldSuppressPageClick = false;
+
+      if (!(isRendererActive() || didJustDrag())) return;
+      if (store.wasActivatedByToggle && !isPromptMode() && !event.shiftKey) {
+        if (!isHoldingKeys()) {
+          deactivateRenderer();
+        } else {
+          actions.setWasActivatedByToggle(false);
+        }
+      }
+    };
+
     eventListenerManager.addWindowListener(
       "click",
       ignoreRealInput((event: MouseEvent) => {
-        if (isEventFromOverlay(event, "data-react-grab-ignore-events")) return;
-        if (isModalPopoverOpen()) return;
+        suppressPageActivation(event);
+      }),
+      { capture: true },
+    );
 
-        if (isRendererActive() || didJustDrag()) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-
-          if (store.wasActivatedByToggle && !isPromptMode() && !event.shiftKey) {
-            if (!isHoldingKeys()) {
-              deactivateRenderer();
-            } else {
-              actions.setWasActivatedByToggle(false);
-            }
-          }
-        }
+    eventListenerManager.addWindowListener(
+      "auxclick",
+      ignoreRealInput((event: MouseEvent) => {
+        suppressPageActivation(event);
       }),
       { capture: true },
     );
@@ -3477,15 +3821,30 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     );
     const hasDragPreviewBounds = createMemo(() => dragPreviewBounds().length > 0);
 
+    const hasCommittedRegions = () =>
+      store.frozenRegions.length > 0 && store.frozenElements.length === 0;
+
+    const isRegionSelectionVisible = (): boolean =>
+      hasCommittedRegions() && isRendererActive() && !isDraggingBeyondThreshold();
+
     const selectionVisible = createMemo(() => {
       if (!isThemeEnabled()) return false;
       if (!isSelectionBoxThemeEnabled()) return false;
       if (isSelectionSuppressed()) return false;
       if (hasDragPreviewBounds()) return true;
+      if (isRegionSelectionVisible()) return true;
       return isSelectionElementVisible();
     });
 
     const selectionTagName = createMemo(() => {
+      if (hasCommittedRegions()) {
+        const regions = store.frozenRegions;
+        if (regions.length === 1) {
+          const region = regions[0];
+          return region ? `region ${formatRegionSizeLabel(region.width, region.height)}` : "region";
+        }
+        return `${regions.length} regions`;
+      }
       const element = selectionElement();
       if (!element) return undefined;
       return getTagName(element) || undefined;
@@ -3496,8 +3855,23 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       if (isModalPopoverOpen()) return false;
       if (!isElementLabelThemeEnabled()) return false;
       if (isSelectionSuppressed()) return false;
+      if (isRegionSelectionVisible()) return true;
 
       return isSelectionElementVisible();
+    });
+
+    const regionOverlays = createMemo(() => {
+      void viewportVersion();
+      if (!hasCommittedRegions() || isDraggingBeyondThreshold()) return [];
+      return store.frozenRegions.map((region) => ({
+        id: region.id,
+        anchor: region.anchor,
+        x: region.x,
+        y: region.y,
+        width: region.width,
+        height: region.height,
+        bounds: createRegionViewportBounds(region),
+      }));
     });
 
     const labelInstanceCache = new Map<string, SelectionLabelInstance>();
@@ -4047,9 +4421,15 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
                 selectionBounds={selectionBounds()}
                 selectionBoundsMultiple={selectionBoundsMultiple()}
                 selectionShouldSnap={
-                  store.frozenElements.length > 0 || dragPreviewBounds().length > 0
+                  store.frozenElements.length > 0 ||
+                  store.frozenRegions.length > 0 ||
+                  dragPreviewBounds().length > 0
                 }
-                selectionElementsCount={store.frozenElements.length}
+                selectionElementsCount={
+                  store.frozenRegions.length > 0 && store.frozenElements.length === 0
+                    ? undefined
+                    : store.frozenElements.length
+                }
                 frozenLabelEntryAccessors={visibleFrozenLabelEntryAccessors()}
                 pendingShiftPreviewEntry={pendingShiftPreviewEntry() ?? undefined}
                 selectionFilePath={store.selectionFilePath ?? undefined}
@@ -4063,6 +4443,11 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
                 labelInstanceAccessors={labelInstanceAccessors()}
                 dragVisible={dragVisible()}
                 dragBounds={dragBounds()}
+                regionOverlays={regionOverlays()}
+                onRegionGeometryChange={(regionId, next: AxisRect) => {
+                  actions.updateFrozenRegion(regionId, next);
+                }}
+                onRegionRemove={removeRegion}
                 grabbedBoxes={computedGrabbedBoxes()}
                 mouseX={
                   store.frozenElements.length > 1
@@ -4071,6 +4456,11 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
                 }
                 isFrozen={isFrozenPhase() || isActivated() || isToolbarSelectHovered()}
                 inputValue={store.inputText}
+                inputPlaceholder={
+                  store.frozenRegions.length > 0 && store.frozenElements.length === 0
+                    ? "Describe what to add here"
+                    : undefined
+                }
                 isPromptMode={isPromptMode()}
                 onShowContextMenuInstance={handleShowContextMenuInstance}
                 onRetryInstance={handleRetryInstance}
@@ -4261,6 +4651,23 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       },
       getStackContext: (element: Element) =>
         getStackContext(element, { maxLines: pluginRegistry.store.options.maxContextLines }),
+      getRegionContext: async (region) => {
+        const built = await buildRegionContext(
+          {
+            id: "query",
+            anchor: region.anchor ?? "page",
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+            note: region.note,
+          },
+          pluginRegistry.store.options.maxContextLines,
+        );
+        return built.text;
+      },
+      getSelectionImages: async () => selectionImages.getLatest(),
+      zoom: (target) => selectionImages.zoom(target),
       getState: (): ReactGrabState => ({
         isActive: isActivated(),
         isDragging: isDragging(),
@@ -4270,6 +4677,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         isDragBoxVisible: Boolean(dragVisible()),
         targetElement: targetElement(),
         dragBounds: dragBounds() ?? null,
+        regions: readRegionState(),
         grabbedBoxes: [...publicGrabbedBoxes()],
         labelInstances: [...publicLabelInstances()],
         selectionFilePath: store.selectionFilePath,

@@ -12,6 +12,8 @@ import type {
   PromptModeContext,
   OverlayBounds,
   DragRect,
+  RegionSelectionPayload,
+  SelectionImageSet,
   ElementLabelVariant,
   ElementLabelContext,
   ActivationMode,
@@ -370,6 +372,8 @@ const createPluginRegistry = (initialOptions: SettableOptions = {}) => {
     },
     onDragStart: (startX: number, startY: number) => callHook("onDragStart", startX, startY),
     onDragEnd: (elements: Element[], bounds: DragRect) => callHook("onDragEnd", elements, bounds),
+    onRegionSelect: (region: RegionSelectionPayload) => callHook("onRegionSelect", region),
+    onSelectionImages: (images: SelectionImageSet) => callHook("onSelectionImages", images),
     onBeforeCopy: async (elements: Element[]) => callHookAsync("onBeforeCopy", elements),
     transformCopyContent: async (content: string, elements: Element[]) =>
       callHookReduce("transformCopyContent", content, elements),

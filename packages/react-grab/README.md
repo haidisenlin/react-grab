@@ -25,6 +25,14 @@ React Grab turns a browser selection into source context your agent can use:
 2. Press **⌘C** or **Ctrl+C**.
 3. Paste the copied context into your agent.
 
+Drag in the same selection mode to mark a free rectangle, including empty space, fixed or sticky chrome, and areas that span more than one layout region. A short drag still selects the element under the pointer. The region stays with the viewport when it starts on fixed or sticky UI, and scrolls with the page otherwise. After you release, type a note and copy context like:
+
+```txt
+Region at x=62%, y=40% (320×180) — empty space below <ProjectCard> and left of <TaskStats> inside <Dashboard>; Request: add a chart
+```
+
+Copied element and region context includes a one-line coordinate summary such as `viewport 1440×900 css px, DPR 2, zoom ~100%`, then viewport size, visual viewport scale and offset, document scroll, device pixel ratio, an estimated browser zoom, scroll containers, and ancestor CSS transforms with the region in screen pixels and untransformed local pixels. The zoom figure is an estimate from the layout viewport versus `visualViewport` (`devicePixelRatio` is reported separately). Screenshots taken in selection mode add a numbered overview plus zoomed crops, each labeled with the CSS rectangle it covers and a scale where `css = origin + px/scale`. Sensitive nodes can opt out with `data-react-grab-mask`.
+
 The copied context includes the selected element and its component stack with source locations:
 
 ```txt

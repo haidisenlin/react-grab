@@ -1,6 +1,6 @@
 import { createStore, produce } from "solid-js/store";
 import { batch, createSignal } from "solid-js";
-import type { Position, GrabbedBox, SelectionLabelInstance } from "../types.js";
+import type { Position, GrabbedBox, RegionAnchor, SelectionLabelInstance } from "../types.js";
 import { OFFSCREEN_POSITION } from "../constants.js";
 import { createElementBounds } from "../utils/create-element-bounds.js";
 import { getBoundsCenter } from "../utils/get-bounds-center.js";
@@ -10,6 +10,15 @@ import { resolveLiveElement, trackElementAnchor } from "./element-anchors.js";
 interface FrozenDragRect {
   pageX: number;
   pageY: number;
+  width: number;
+  height: number;
+}
+
+interface GrabRegion {
+  id: string;
+  anchor: RegionAnchor;
+  x: number;
+  y: number;
   width: number;
   height: number;
 }
@@ -35,6 +44,7 @@ interface GrabStore {
   pendingCommentMode: boolean;
   keyHoldDuration: number;
 
+  dragAnchor: RegionAnchor;
   dragStart: Position;
   copyStart: Position;
   copyOffsetFromCenterX: number;
@@ -43,6 +53,7 @@ interface GrabStore {
   frozenElement: Element | null;
   frozenElements: Element[];
   frozenDragRect: FrozenDragRect | null;
+  frozenRegions: GrabRegion[];
   lastGrabbedElement: Element | null;
 
   selectionFilePath: string | null;
@@ -113,6 +124,7 @@ const createInitialStore = (input: GrabStoreInput): GrabStore => ({
   pendingCommentMode: false,
   keyHoldDuration: input.keyHoldDuration,
 
+  dragAnchor: "page",
   dragStart: { x: OFFSCREEN_POSITION, y: OFFSCREEN_POSITION },
   copyStart: { x: OFFSCREEN_POSITION, y: OFFSCREEN_POSITION },
   copyOffsetFromCenterX: 0,
@@ -121,6 +133,7 @@ const createInitialStore = (input: GrabStoreInput): GrabStore => ({
   frozenElement: null,
   frozenElements: [],
   frozenDragRect: null,
+  frozenRegions: [],
   lastGrabbedElement: null,
 
   selectionFilePath: null,
@@ -149,7 +162,17 @@ interface GrabActions {
   toggle: () => void;
   freeze: () => void;
   unfreeze: () => void;
-  startDrag: (position: Position, shouldPreserveFrozenElements?: boolean) => void;
+  startDrag: (
+    position: Position,
+    shouldPreserveFrozenElements?: boolean,
+    anchor?: RegionAnchor,
+  ) => void;
+  freezePhase: () => void;
+  enterRegionPrompt: (position: Position) => void;
+  setFrozenRegions: (regions: GrabRegion[]) => void;
+  addFrozenRegion: (region: GrabRegion) => void;
+  updateFrozenRegion: (regionId: string, next: Omit<GrabRegion, "id" | "anchor">) => void;
+  removeFrozenRegion: (regionId: string) => void;
   startDragReposition: () => void;
   stopDragReposition: () => void;
   shiftDragStart: (delta: Position) => void;
@@ -213,6 +236,7 @@ const createGrabStore = (input: GrabStoreInput) => {
         mutator(draft);
         draft.frozenElement = draft.frozenElements.length > 0 ? draft.frozenElements[0] : null;
         draft.frozenDragRect = null;
+        draft.frozenRegions = [];
         for (const frozenElement of draft.frozenElements) {
           trackElementAnchor(frozenElement);
         }
@@ -268,6 +292,8 @@ const createGrabStore = (input: GrabStoreInput) => {
             draft.frozenElement = null;
             draft.frozenElements = [];
             draft.frozenDragRect = null;
+            draft.frozenRegions = [];
+            draft.dragAnchor = "page";
             draft.activationTimestamp = null;
             draft.previouslyFocusedElement = null;
             draft.contextMenuPosition = null;
@@ -313,6 +339,7 @@ const createGrabStore = (input: GrabStoreInput) => {
               draft.frozenElement = null;
               draft.frozenElements = [];
               draft.frozenDragRect = null;
+              draft.frozenRegions = [];
             }),
           );
           setActivePhase("hovering");
@@ -320,20 +347,103 @@ const createGrabStore = (input: GrabStoreInput) => {
       }
     },
 
-    startDrag: (position: Position, shouldPreserveFrozenElements?: boolean) => {
+    startDrag: (position: Position, shouldPreserveFrozenElements?: boolean, anchor = "page") => {
       const currentState = current();
       if (currentState.state === "active") {
         batch(() => {
           if (!shouldPreserveFrozenElements) {
             clearFrozenElement();
           }
-          setStore("dragStart", {
-            x: position.x + window.scrollX,
-            y: position.y + window.scrollY,
-          });
+          setStore("dragAnchor", anchor);
+          setStore(
+            "dragStart",
+            anchor === "viewport"
+              ? { x: position.x, y: position.y }
+              : {
+                  x: position.x + window.scrollX,
+                  y: position.y + window.scrollY,
+                },
+          );
           setActivePhase("dragging-select");
         });
       }
+    },
+
+    freezePhase: () => {
+      if (current().state === "active") setActivePhase("frozen");
+    },
+
+    enterRegionPrompt: (position: Position) => {
+      batch(() => {
+        setStore("copyStart", position);
+        setStore("copyOffsetFromCenterX", 0);
+        setPointer(position);
+        setStore("frozenElement", null);
+        setStore("frozenElements", []);
+        setStore("wasActivatedByToggle", true);
+        setStore("pendingCommentMode", false);
+        if (current().state !== "active") {
+          setCurrent({
+            state: "active",
+            phase: "frozen",
+            isPromptMode: true,
+            isPendingDismiss: false,
+          });
+          setStore("activationTimestamp", Date.now());
+          setStore("previouslyFocusedElement", document.activeElement);
+        } else {
+          setCurrent((prev) =>
+            prev.state === "active"
+              ? { ...prev, isPromptMode: true, phase: "frozen", isPendingDismiss: false }
+              : prev,
+          );
+        }
+      });
+    },
+
+    setFrozenRegions: (regions: GrabRegion[]) => {
+      setStore(
+        produce((draft) => {
+          draft.frozenRegions = regions;
+          draft.frozenElements = [];
+          draft.frozenElement = null;
+          draft.frozenDragRect = null;
+        }),
+      );
+    },
+
+    addFrozenRegion: (region: GrabRegion) => {
+      setStore(
+        produce((draft) => {
+          draft.frozenRegions.push(region);
+          draft.frozenElements = [];
+          draft.frozenElement = null;
+          draft.frozenDragRect = null;
+        }),
+      );
+    },
+
+    updateFrozenRegion: (regionId: string, next: Omit<GrabRegion, "id" | "anchor">) => {
+      setStore(
+        produce((draft) => {
+          const region = draft.frozenRegions.find((candidate) => candidate.id === regionId);
+          if (!region) return;
+          region.x = next.x;
+          region.y = next.y;
+          region.width = next.width;
+          region.height = next.height;
+        }),
+      );
+    },
+
+    removeFrozenRegion: (regionId: string) => {
+      setStore(
+        produce((draft) => {
+          draft.frozenRegions = draft.frozenRegions.filter(
+            (candidate) => candidate.id !== regionId,
+          );
+        }),
+      );
     },
 
     startDragReposition: () => {
@@ -368,6 +478,7 @@ const createGrabStore = (input: GrabStoreInput) => {
       ) {
         batch(() => {
           setStore("dragStart", { x: OFFSCREEN_POSITION, y: OFFSCREEN_POSITION });
+          setStore("dragAnchor", "page");
           setActivePhase("justDragged");
         });
       }
@@ -381,6 +492,7 @@ const createGrabStore = (input: GrabStoreInput) => {
       ) {
         batch(() => {
           setStore("dragStart", { x: OFFSCREEN_POSITION, y: OFFSCREEN_POSITION });
+          setStore("dragAnchor", "page");
           setActivePhase("hovering");
         });
       }

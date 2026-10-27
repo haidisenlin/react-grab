@@ -98,6 +98,7 @@ export interface ReactGrabState {
   isDragBoxVisible: boolean;
   targetElement: Element | null;
   dragBounds: DragRect | null;
+  regions: ReactGrabRegionState[];
   /**
    * Currently visible grabbed boxes (success flash effects).
    * These are temporary visual indicators shown after elements are grabbed/copied.
@@ -231,6 +232,8 @@ export interface PluginHooks {
   onElementSelect?: (element: Element) => boolean | void | Promise<boolean>;
   onDragStart?: (startX: number, startY: number) => void | Promise<void>;
   onDragEnd?: (elements: Element[], bounds: DragRect) => void | Promise<void>;
+  onRegionSelect?: (region: RegionSelectionPayload) => void | Promise<void>;
+  onSelectionImages?: (images: SelectionImageSet) => void | Promise<void>;
   onBeforeCopy?: (elements: Element[]) => void | Promise<void>;
   transformCopyContent?: (content: string, elements: Element[]) => string | Promise<string>;
   onAfterCopy?: (elements: Element[], success: boolean) => void | Promise<void>;
@@ -343,9 +346,15 @@ export interface ElementSelectedEventDetail {
   elements: SelectedElementPayload[];
 }
 
+export interface RegionSelectedEventDetail {
+  type: "region";
+  regions: RegionSelectionPayload[];
+}
+
 declare global {
   interface WindowEventMap {
     "react-grab:element-selected": CustomEvent<ElementSelectedEventDetail>;
+    "react-grab:region-selected": CustomEvent<RegionSelectedEventDetail>;
   }
 }
 
@@ -379,6 +388,16 @@ export interface ReactGrabAPI {
   copyElement: (elements: Element | Element[]) => Promise<boolean>;
   getSource: (element: Element) => Promise<SourceInfo | null>;
   getStackContext: (element: Element) => Promise<string>;
+  getRegionContext: (region: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    anchor?: RegionAnchor;
+    note?: string;
+  }) => Promise<string>;
+  getSelectionImages: () => Promise<SelectionImageSet | null>;
+  zoom: (target: AxisRect | string) => Promise<SelectionZoomImage | null>;
   getState: () => ReactGrabState;
   setOptions: (options: SettableOptions) => void;
   registerPlugin: (plugin: Plugin) => void;
@@ -452,6 +471,9 @@ export interface ReactGrabRendererProps {
   labelInstanceAccessors?: SelectionLabelInstanceAccessor[];
   dragVisible?: boolean;
   dragBounds?: OverlayBounds;
+  regionOverlays?: RegionOverlayModel[];
+  onRegionGeometryChange?: (regionId: string, next: AxisRect) => void;
+  onRegionRemove?: (regionId: string) => void;
   grabbedBoxes?: Array<{
     id: string;
     bounds: OverlayBounds;
@@ -460,6 +482,7 @@ export interface ReactGrabRendererProps {
   mouseX?: number;
   isFrozen?: boolean;
   inputValue?: string;
+  inputPlaceholder?: string;
   isPromptMode?: boolean;
   onShowContextMenuInstance?: (instanceId: string) => void;
   onRetryInstance?: (instanceId: string) => void;
@@ -582,6 +605,7 @@ export interface SelectionLabelProps {
   visible?: boolean;
   isPromptMode?: boolean;
   inputValue?: string;
+  inputPlaceholder?: string;
   status?: SelectionLabelStatus;
   statusText?: string;
   filePath?: string;
@@ -613,7 +637,143 @@ export interface ReactGrabStackFrame {
   isSymbolicated?: boolean;
 }
 
+export type RegionAnchor = "page" | "viewport";
+
+export interface AxisRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RegionMeasurement {
+  anchor: RegionAnchor;
+  viewport: AxisRect;
+  page: AxisRect;
+  viewportPercent: AxisRect;
+  documentPercent: AxisRect;
+}
+
+export interface RegionOverlayModel {
+  id: string;
+  anchor: RegionAnchor;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  bounds: OverlayBounds;
+}
+
+export interface ReactGrabRegionState {
+  id: string;
+  anchor: RegionAnchor;
+  bounds: DragRect;
+  pageBounds: DragRect;
+}
+
+export interface VisualViewportFrame {
+  scale: number;
+  offsetLeft: number;
+  offsetTop: number;
+  width: number;
+  height: number;
+}
+
+export interface ScrollContainerFrame {
+  label: string;
+  rect: AxisRect;
+  scrollLeft: number;
+  scrollTop: number;
+  scrollWidth: number;
+  scrollHeight: number;
+}
+
+export interface AncestorTransformFrame {
+  label: string;
+  scaleX: number;
+  scaleY: number;
+  translateX: number;
+  translateY: number;
+  screenRect: AxisRect;
+}
+
+export interface BrowserZoomEstimate {
+  ratio: number;
+  percent: number;
+  estimate: true;
+}
+
+export interface CoordinateFrame {
+  summary: string;
+  viewport: { width: number; height: number };
+  visualViewport: VisualViewportFrame | null;
+  document: { width: number; height: number; scrollX: number; scrollY: number };
+  devicePixelRatio: number;
+  browserZoom: BrowserZoomEstimate;
+  scrollContainers: ScrollContainerFrame[];
+  ancestorTransforms: AncestorTransformFrame[];
+  screenRect: AxisRect;
+  localRect: AxisRect;
+}
+
+export interface SelectionAnnotation {
+  image_ref: string;
+  crop_rect_css: AxisRect;
+  region_rect_in_crop_px: AxisRect;
+  scale: number;
+  overview_box_px: AxisRect;
+  token_estimate: number;
+  pixel_width: number;
+  pixel_height: number;
+  numbers: number[];
+  coordinate_frame: CoordinateFrame;
+}
+
+export interface SelectionImageRecord {
+  image_ref: string;
+  css_rect: AxisRect;
+  pixel_width: number;
+  pixel_height: number;
+  scale: number;
+  token_estimate: number;
+  data_url: string;
+  blob: Blob;
+  coordinate_frame: CoordinateFrame;
+}
+
+export interface SelectionImageSet {
+  overview: SelectionImageRecord;
+  crops: SelectionImageRecord[];
+  annotations: SelectionAnnotation[];
+}
+
+export interface SelectionZoomImage {
+  image_ref: string;
+  css_rect: AxisRect;
+  pixel_width: number;
+  pixel_height: number;
+  scale: number;
+  token_estimate: number;
+  data_url: string;
+  blob: Blob;
+  coordinate_frame: CoordinateFrame;
+}
+
+export interface RegionSelectionPayload {
+  type: "region";
+  id: string;
+  text: string;
+  note: string;
+  isEmpty: boolean;
+  anchor: RegionAnchor;
+  measurement: RegionMeasurement;
+  ancestorLabel: string | null;
+  ancestorSelector: string | null;
+  coordinateFrame: CoordinateFrame | null;
+}
+
 export interface ReactGrabEntry {
+  type?: "element" | "region";
   tagName?: string;
   componentName?: string;
   content: string;
@@ -621,4 +781,6 @@ export interface ReactGrabEntry {
   source?: SourceLocation | null;
   stackContext?: string;
   frames?: ReactGrabStackFrame[];
+  region?: RegionSelectionPayload;
+  coordinateFrame?: CoordinateFrame | null;
 }

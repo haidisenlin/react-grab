@@ -40,6 +40,17 @@ export type {
   PluginHooks,
   SelectedElementPayload,
   ElementSelectedEventDetail,
+  RegionAnchor,
+  RegionMeasurement,
+  RegionSelectionPayload,
+  RegionSelectedEventDetail,
+  ReactGrabRegionState,
+  AxisRect,
+  CoordinateFrame,
+  SelectionAnnotation,
+  SelectionImageSet,
+  SelectionZoomImage,
+  BrowserZoomEstimate,
 } from "./types.js";
 
 import { init } from "./core/index.js";

@@ -465,7 +465,7 @@ export const SelectionLabel: Component<SelectionLabelProps> = (props) => {
                     value={props.inputValue ?? ""}
                     onInput={handleInput}
                     onKeyDown={handleKeyDown}
-                    placeholder="Add context"
+                    placeholder={props.inputPlaceholder ?? "Add context"}
                     rows={1}
                     readOnly={!props.onSubmit}
                   />
