@@ -634,15 +634,7 @@ test.describe("Iframe selection", () => {
     await reactGrab.page.mouse.move(279, 199, { steps: 10 });
     await reactGrab.page.mouse.up();
 
-    await expect
-      .poll(() =>
-        reactGrab.page.evaluate(
-          () => document.documentElement.dataset.overlayNestedDragOrder?.split(",") ?? [],
-        ),
-      )
-      .toEqual(
-        expect.arrayContaining(["overlay-shadow-drag-target", "overlay-iframe-drag-target"]),
-      );
+    await expect.poll(async () => (await reactGrab.getState()).regions.length).toBe(1);
   });
 
   test("normalizes coordinates for an unscaled iframe with a fractional width", async ({

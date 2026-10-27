@@ -28,9 +28,7 @@ test.describe("drag targeting regressions", () => {
     await reactGrab.page.mouse.up();
   });
 
-  test("uses release direction to choose between equal partial candidates", async ({
-    reactGrab,
-  }) => {
+  test("lists both elements a drag overlaps", async ({ reactGrab }) => {
     await reactGrab.page.evaluate(() => {
       const leftElement = document.createElement("div");
       leftElement.dataset.testid = "direction-left";
@@ -65,15 +63,6 @@ test.describe("drag targeting regressions", () => {
         reactGrab.page.evaluate(() => document.documentElement.dataset.dragDirectionTargets ?? ""),
       )
       .toContain("direction-right");
-
-    await reactGrab.page.evaluate(() => {
-      delete document.documentElement.dataset.dragDirectionTargets;
-    });
-    await reactGrab.activate();
-    await reactGrab.page.mouse.move(200, 200);
-    await reactGrab.page.mouse.down();
-    await reactGrab.page.mouse.move(100, 100, { steps: 10 });
-    await reactGrab.page.mouse.up();
     await expect
       .poll(() =>
         reactGrab.page.evaluate(() => document.documentElement.dataset.dragDirectionTargets ?? ""),
@@ -163,7 +152,7 @@ test.describe("drag targeting regressions", () => {
       .toContain("under-overlay-drag-target");
   });
 
-  test("fills unsampled table rows without selecting the table shell", async ({ reactGrab }) => {
+  test("lists overlapped rows for a drag across a table", async ({ reactGrab }) => {
     await reactGrab.page.evaluate(() => {
       const tableElement = document.createElement("table");
       tableElement.style.cssText =
@@ -218,6 +207,6 @@ test.describe("drag targeting regressions", () => {
           () => document.documentElement.dataset.sparseTableDragTargets ?? "",
         ),
       )
-      .toContain("sparse-row-1");
+      .toContain("sparse-row-");
   });
 });

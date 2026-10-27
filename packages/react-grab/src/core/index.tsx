@@ -1609,17 +1609,6 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       setRegionOverlapItems((previous) => previous.filter((item) => trackedOverlaps.has(item.id)));
     };
 
-    const startSpaceDragRepositioning = () => {
-      if (!isDragging()) return;
-      actions.startDragReposition();
-      if (store.dragAnchor === "viewport") {
-        previousSpaceDragPointerPage = { x: pointer().x, y: pointer().y };
-        return;
-      }
-      const { pageX, pageY } = toPageCoordinates(pointer().x, pointer().y);
-      previousSpaceDragPointerPage = { x: pageX, y: pageY };
-    };
-
     const stopSpaceDragRepositioning = () => {
       actions.stopDragReposition();
       previousSpaceDragPointerPage = null;

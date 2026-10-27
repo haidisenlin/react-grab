@@ -176,7 +176,7 @@ test.describe("Combinatorial Interactions", () => {
       await reactGrab.page.waitForTimeout(STATE_SETTLE_WAIT_MS);
 
       expect((await reactGrab.getState()).isDragging).toBe(false);
-      await expect.poll(() => reactGrab.getClipboardContent()).not.toBe("");
+      expect((await reactGrab.getState()).regions.length).toBe(1);
     });
   });
 

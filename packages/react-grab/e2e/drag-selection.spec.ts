@@ -136,7 +136,12 @@ test.describe("Drag Selection", () => {
       .poll(() => reactGrab.page.locator("#space-passthrough-button").getAttribute("data-clicks"))
       .toBe("1");
 
-    await reactGrab.page.locator("#space-passthrough-button").click();
+    const buttonBox = await reactGrab.page.locator("#space-passthrough-button").boundingBox();
+    if (!buttonBox) throw new Error("Could not get passthrough button bounds");
+    await reactGrab.page.mouse.click(
+      buttonBox.x + buttonBox.width / 2,
+      buttonBox.y + buttonBox.height / 2,
+    );
     await reactGrab.page.waitForTimeout(200);
     expect(
       await reactGrab.page.locator("#space-passthrough-button").getAttribute("data-clicks"),
