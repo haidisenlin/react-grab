@@ -218,6 +218,7 @@ const filterElementsInDrag = (
   dragRect: DragRect,
   intentPoint: Position,
   isValidGrabbableElement: (element: Element) => boolean,
+  includeNearestFallback: boolean,
 ): Element[] => {
   const dragLeft = dragRect.x;
   const dragTop = dragRect.y;
@@ -436,7 +437,7 @@ const filterElementsInDrag = (
 
   return matchingElements.length > 0
     ? sortByDocumentOrder(matchingElements)
-    : nearestFallbackElement
+    : includeNearestFallback && nearestFallbackElement
       ? [nearestFallbackElement]
       : [];
 };
@@ -481,7 +482,13 @@ export const getElementsInDrag = (
   dragRect: DragRect,
   intentPoint: Position,
   isValidGrabbableElement: (element: Element) => boolean,
+  includeNearestFallback = true,
 ): Element[] => {
-  const elements = filterElementsInDrag(dragRect, intentPoint, isValidGrabbableElement);
+  const elements = filterElementsInDrag(
+    dragRect,
+    intentPoint,
+    isValidGrabbableElement,
+    includeNearestFallback,
+  );
   return removeNestedElements(elements);
 };

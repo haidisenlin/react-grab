@@ -3,6 +3,8 @@ import type { ReactGrabRendererProps } from "../types.js";
 import { DEFAULT_ACTION_ID } from "../constants.js";
 import { isElementConnected } from "../utils/is-element-connected.js";
 import { OverlayCanvas } from "./overlay-canvas.js";
+import { DragSizeLabel } from "./drag-size-label.js";
+import { RegionHandles } from "./region-handles.js";
 import { FrozenGlow } from "./frozen-glow.js";
 import { SelectionLabel } from "./selection-label/index.js";
 import { Toolbar } from "./toolbar/index.js";
@@ -22,6 +24,12 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
         dragBounds={props.dragBounds}
         grabbedBoxes={props.grabbedBoxes}
         labelInstances={props.labelInstances}
+      />
+      <DragSizeLabel visible={props.dragVisible ?? false} bounds={props.dragBounds} />
+      <RegionHandles
+        regions={props.regionOverlays ?? []}
+        onChange={(regionId, next) => props.onRegionGeometryChange?.(regionId, next)}
+        onRemove={(regionId) => props.onRegionRemove?.(regionId)}
       />
       <FrozenGlow visible={props.isFrozen ?? false} />
       <Show
@@ -70,10 +78,13 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
           visible={props.selectionLabelVisible}
           isPromptMode={props.isPromptMode}
           inputValue={props.inputValue}
+          inputPlaceholder={props.inputPlaceholder}
           status={props.selectionLabelStatus}
           filePath={props.selectionFilePath}
           onInputChange={props.onInputChange}
           onSubmit={props.onInputSubmit}
+          regionOverlaps={props.regionOverlaps}
+          onRemoveRegionOverlap={props.onRemoveRegionOverlap}
           selectionLabelShakeCount={props.selectionLabelShakeCount}
           onConfirmDismiss={props.onConfirmDismiss}
           discardPrompt={props.discardPrompt}

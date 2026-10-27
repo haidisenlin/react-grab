@@ -1,16 +1,21 @@
-import { resolveElementReferenceContext } from "./context.js";
-import { copyContent } from "../utils/copy-content.js";
+import { getComponentDisplayName, resolveElementReferenceContext } from "./context.js";
+import { copyContent, currentClipboardGeneration } from "../utils/copy-content.js";
 import { normalizeError } from "../utils/normalize-error.js";
 import { getTagName } from "../utils/get-tag-name.js";
+import { appendCoordinateFrame } from "../utils/read-coordinate-frame.js";
 import { ABORTED_PROMISE_RESULT, racePromiseWithAbort } from "../utils/race-promise-with-abort.js";
 import type { StackFrame } from "bippy/source";
 import type { ReactGrabEntry, ReactGrabStackFrame } from "../types.js";
 
 interface CopyFlowOptions {
   getContent?: (elements: Element[]) => Promise<string> | string;
+  getPayload?: () => Promise<CopyPayload | null> | CopyPayload | null;
   componentName?: string;
   maxContextLines?: number;
   signal?: AbortSignal;
+  appendText?: string;
+  overviewImage?: Blob | null;
+  imageAttachment?: Promise<{ appendText?: string; overviewImage?: Blob | null } | null>;
 }
 
 interface CopyFlowHooks {
@@ -51,11 +56,18 @@ const buildElementPayloadEntry = async (
   const elementContext = await resolveElementReferenceContext(element, {
     maxLines: maxContextLines,
   });
+  const framed = appendCoordinateFrame(
+    `[${elementContext.referenceContext}]`,
+    element,
+    null,
+    (candidate) => getComponentDisplayName(candidate),
+  );
   return {
     tagName: getTagName(element),
     componentName:
       elementContext.componentName ?? elementContext.source?.componentName ?? undefined,
-    content: `[${elementContext.referenceContext}]`,
+    content: framed.text,
+    coordinateFrame: framed.frame,
     source: elementContext.source,
     stackContext: elementContext.stackContext,
     frames: elementContext.stack.map(formatStackFramePayload),
@@ -111,9 +123,11 @@ export const runCopyFlow = async (
   let finalContent = "";
 
   try {
-    const pendingPayload: Promise<CopyPayload | null> = options.getContent
-      ? Promise.resolve(options.getContent(elements)).then((content) => ({ content }))
-      : buildClipboardPayload(elements, options.maxContextLines);
+    const pendingPayload: Promise<CopyPayload | null> = options.getPayload
+      ? Promise.resolve(options.getPayload())
+      : options.getContent
+        ? Promise.resolve(options.getContent(elements)).then((content) => ({ content }))
+        : buildClipboardPayload(elements, options.maxContextLines);
     const payload = await racePromiseWithAbort(pendingPayload, options.signal);
     if (payload === ABORTED_PROMISE_RESULT) return CANCELLED_COPY_FLOW_RESULT;
     const rawContent = payload?.content;
@@ -129,12 +143,32 @@ export const runCopyFlow = async (
       finalContent = prependedPrompt
         ? `${prependedPrompt}\n${transformedContent}`
         : transformedContent;
+      if (options.appendText?.trim()) {
+        finalContent = `${finalContent}\n${options.appendText}`;
+      }
       if (finalContent.trim()) {
         didStartClipboardWrite = true;
         didCopy = copyContent(finalContent, {
           componentName: options.componentName,
           entries: getMetadataEntries(payload, finalContent, prependedPrompt),
+          overviewImage: options.overviewImage,
         });
+        const textGeneration = currentClipboardGeneration();
+        if (didCopy && options.imageAttachment) {
+          void options.imageAttachment
+            .then((imageAttachment) => {
+              if (options.signal?.aborted || !imageAttachment) return;
+              if (currentClipboardGeneration() !== textGeneration) return;
+              const appendText = imageAttachment.appendText?.trim();
+              const upgradedContent = appendText ? `${finalContent}\n${appendText}` : finalContent;
+              copyContent(upgradedContent, {
+                componentName: options.componentName,
+                entries: getMetadataEntries(payload, upgradedContent, prependedPrompt),
+                overviewImage: imageAttachment.overviewImage,
+              });
+            })
+            .catch(() => undefined);
+        }
       }
     }
   } catch (error) {

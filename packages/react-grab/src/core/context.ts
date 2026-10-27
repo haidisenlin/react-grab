@@ -26,6 +26,7 @@ import { enrichServerFrameLocations, symbolicateServerFrames } from "./next-serv
 import { runQueuedSourceFetch } from "../utils/source-fetch-queue.js";
 import { resolveSolidSourceLocation } from "../utils/resolve-solid-source-location.js";
 import { getHTMLPreview, getInlineHTMLPreview } from "./html-preview.js";
+import { appendCoordinateFrame } from "../utils/read-coordinate-frame.js";
 import { isShadowRoot } from "../utils/is-shadow-root.js";
 import {
   isInternalComponentName,
@@ -773,7 +774,10 @@ export const formatElementInfo = async (
   const nearestFiberElement = findNearestFiberElement(element);
   const htmlPreview = getHTMLPreview(nearestFiberElement);
   const traceContext = await getTraceContext(nearestFiberElement, options);
-  return `${htmlPreview}${composeElementContext(nearestFiberElement, traceContext).text}`;
+  const text = `${htmlPreview}${composeElementContext(nearestFiberElement, traceContext).text}`;
+  return appendCoordinateFrame(text, nearestFiberElement, null, (candidate) =>
+    getComponentDisplayName(candidate),
+  ).text;
 };
 
 const createResolvedElementContextBase = (

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>React Grab IIFE capture</title>
+    <style>
+      body {
+        margin: 0;
+        background: #f4f1ea;
+        font-family: sans-serif;
+      }
+
+      #grab-target {
+        margin: 48px;
+        width: 240px;
+        height: 80px;
+        border: 0;
+        background: #c2410c;
+        color: white;
+        font-size: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="grab-target" type="button">Grab this button</button>
+    <!-- The IIFE looks up a free global named react. A page without a bundler still has to provide it. -->
+    <script>
+      window.react = new Proxy(
+        {},
+        {
+          get(target, key) {
+            if (typeof key !== "string") return undefined;
+            if (!(key in target)) target[key] = function reactStub() { return null; };
+            return target[key];
+          },
+        },
+      );
+    </script>
+    <script src="/index.global.js"></script>
+  </body>
+</html>

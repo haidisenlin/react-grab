@@ -5,11 +5,18 @@ import { IS_DEMO } from "./runtime-mode.js";
 
 const REACT_GRAB_MIME_TYPE = "application/x-react-grab";
 
+let clipboardGeneration = 0;
+let latestPlainText = "";
+let clipboardWriteChain: Promise<void> = Promise.resolve();
+
+export const currentClipboardGeneration = (): number => clipboardGeneration;
+
 interface CopyContentOptions {
   componentName?: string;
   tagName?: string;
   commentText?: string;
   entries?: ReactGrabEntry[];
+  overviewImage?: Blob | null;
 }
 
 interface ReactGrabMetadata {
@@ -25,6 +32,9 @@ export const copyContent = (content: string, options?: CopyContentOptions): bool
   // "Copied" feedback without writing.
   if (IS_DEMO) return true;
 
+  clipboardGeneration += 1;
+  const copiedGeneration = clipboardGeneration;
+  latestPlainText = content;
   const elementName = options?.componentName ?? "div";
   const entries = options?.entries ?? [
     {
@@ -62,6 +72,7 @@ export const copyContent = (content: string, options?: CopyContentOptions): bool
   const textarea = document.createElement("textarea");
   document.addEventListener("copy", copyHandler);
 
+  let didCopy = false;
   try {
     textarea.value = content;
     textarea.style.position = "fixed";
@@ -73,9 +84,33 @@ export const copyContent = (content: string, options?: CopyContentOptions): bool
     if (typeof document.execCommand !== "function") {
       return false;
     }
-    return document.execCommand("copy");
+    didCopy = document.execCommand("copy");
+    return didCopy;
   } finally {
     document.removeEventListener("copy", copyHandler);
     textarea.remove();
+    if (didCopy && options?.overviewImage) {
+      writeOverviewImage(content, options.overviewImage, copiedGeneration);
+    }
   }
+};
+
+const writeOverviewImage = (content: string, overviewImage: Blob, generation: number) => {
+  clipboardWriteChain = clipboardWriteChain.then(async () => {
+    if (generation !== clipboardGeneration) return;
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.write || typeof ClipboardItem === "undefined") return;
+    const html = `<meta charset='utf-8'><pre><code>${escapeHtmlText(content)}</code></pre>`;
+    const item = new ClipboardItem({
+      "text/plain": new Blob([content], { type: "text/plain" }),
+      "text/html": new Blob([html], { type: "text/html" }),
+      "image/png": overviewImage,
+    });
+    try {
+      await clipboard.write([item]);
+    } catch {
+      return;
+    }
+    if (generation !== clipboardGeneration) copyContent(latestPlainText);
+  });
 };

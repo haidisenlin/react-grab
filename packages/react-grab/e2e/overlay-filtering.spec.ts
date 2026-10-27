@@ -94,10 +94,8 @@ test.describe("Overlay Filtering", () => {
     test("drag selection should work through overlay canvas", async ({ reactGrab }) => {
       await reactGrab.activate();
       await reactGrab.dragSelect("li:first-child", "li:nth-child(3)");
-      await reactGrab.page.waitForTimeout(500);
 
-      const grabbedInfo = await reactGrab.getGrabbedBoxInfo();
-      expect(grabbedInfo.count).toBeGreaterThan(1);
+      await expect.poll(async () => (await reactGrab.getState()).regions.length).toBe(1);
     });
   });
 

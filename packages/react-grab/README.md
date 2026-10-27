@@ -25,6 +25,20 @@ React Grab turns a browser selection into source context your agent can use:
 2. Press **⌘C** or **Ctrl+C**.
 3. Paste the copied context into your agent.
 
+In selection mode, a click that moves less than 5px selects the deepest element under the pointer. Arrow keys still move to the parent or child. A drag that moves more than 5px always draws a region, including when it starts on an element or covers several of them. A box smaller than 8×8 is ignored. The region lists the elements it overlaps, sorted by how much of the region each one covers, with that share and the share of the element. Remove any you do not want before copying. Shift+click adds or removes elements. Hold Space to let clicks through to the page, then release it to select again. Space stays the activation key when selection is in hold mode on Space. The region stays with the viewport when it starts on fixed or sticky UI, and scrolls with the page otherwise. After you release, type a note and copy context like:
+
+```txt
+Region at x=62%, y=40% (320×180) — empty space below <ProjectCard> and left of <TaskStats> inside <Dashboard>; Request: add a chart
+```
+
+Copied element and region context includes a one-line coordinate summary such as `viewport 1440×900 css px, DPR 2, zoom ~100%`, then viewport size, visual viewport scale and offset, document scroll, device pixel ratio, an estimated browser zoom, scroll containers, and ancestor CSS transforms with the region in screen pixels and untransformed local pixels. The zoom figure is an estimate from the layout viewport versus `visualViewport` (`devicePixelRatio` is reported separately). Screenshots taken in selection mode add a numbered overview plus zoomed crops, each labeled with the CSS rectangle it covers and a scale where `css = origin + px/scale`. Sensitive nodes can opt out with `data-react-grab-mask`.
+
+A plain `<script>` page does not bundle the screenshot engines. Load `dist/index.global.js` and React Grab will request `dist/capture.global.js` from the same directory. That file bundles snapDOM and the html-to-image fallback. To host the capture build somewhere else, set `window.__REACT_GRAB_CAPTURE_SRC__` before `index.global.js`, or put `data-react-grab-capture-src` on the React Grab script tag. Including `capture.global.js` yourself also works.
+
+```html
+<script src="https://unpkg.com/react-grab/dist/index.global.js" crossorigin="anonymous"></script>
+```
+
 The copied context includes the selected element and its component stack with source locations:
 
 ```txt

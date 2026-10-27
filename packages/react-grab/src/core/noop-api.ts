@@ -18,6 +18,9 @@ export const createNoopApi = (): ReactGrabAPI => ({
   copyElement: () => Promise.resolve(false),
   getSource: () => Promise.resolve(null),
   getStackContext: () => Promise.resolve(""),
+  getRegionContext: () => Promise.resolve(""),
+  getSelectionImages: () => Promise.resolve(null),
+  zoom: () => Promise.resolve(null),
   getState: () => ({
     isActive: false,
     isDragging: false,
@@ -27,6 +30,7 @@ export const createNoopApi = (): ReactGrabAPI => ({
     isDragBoxVisible: false,
     targetElement: null,
     dragBounds: null,
+    regions: [],
     grabbedBoxes: [],
     labelInstances: [],
     selectionFilePath: null,

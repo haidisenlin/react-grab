@@ -17,6 +17,7 @@ import { isPointInsideRect } from "./is-point-inside-rect.js";
 import { isElementPaintedAtPosition } from "./is-element-painted-at-position.js";
 import { isValidGrabbableElement } from "./is-valid-grabbable-element.js";
 import { resumePointerEventsFreeze, suspendPointerEventsFreeze } from "./pointer-events-freeze.js";
+import { resolveGenericHitAtPoint } from "./resolve-generic-hit-at-point.js";
 import { resolveThreeElementAtPoint } from "../core/three-selection.js";
 
 interface PositionCache {
@@ -187,22 +188,42 @@ export const getElementAtPosition = (clientX: number, clientY: number): Element 
     }
 
     let result: Element | null = null;
+    let usesTextHitTesting = false;
+    let topElement: Element | null = null;
 
-    // elementFromPoint returns the topmost element, but if it's not grabbable
-    // (e.g. a transparent overlay) or out of scope (e.g. an external element
-    // overlapping the scoped container) we fall back to elementsFromPoint, which
-    // returns the full z-ordered stack, and take the first grabbable in-scope one.
-    const topElement = getDeepElementAtPoint(clientX, clientY);
-    const usesTextHitTesting = topElement ? getElementTextBounds(topElement) !== null : false;
-    const localContentElement = topElement
-      ? getLocalContentElementAtPoint(topElement, clientX, clientY)
+    const genericElement = resolveGenericHitAtPoint(clientX, clientY);
+    const genericResolved = genericElement
+      ? resolveThreeElementAtPoint(genericElement, clientX, clientY)
       : null;
-    const localContentResult = localContentElement
-      ? resolveValidElementAtPoint(localContentElement, clientX, clientY)
-      : null;
-    const topResult = topElement ? resolveValidElementAtPoint(topElement, clientX, clientY) : null;
-    const fallbackResult = topResult ?? getDeepFallbackElementAtPoint(clientX, clientY);
-    result = localContentResult ?? fallbackResult;
+    const genericResult =
+      genericResolved && isValidGrabbableElement(genericResolved) && isWithinScope(genericResolved)
+        ? genericResolved
+        : null;
+
+    let fallbackResult: Element | null = null;
+    let localContentElement: Element | null = null;
+    if (genericResult) {
+      result = genericResult;
+      fallbackResult = genericResult;
+    } else {
+      // elementFromPoint returns the topmost element, but if it's not grabbable
+      // (e.g. a transparent overlay) or out of scope (e.g. an external element
+      // overlapping the scoped container) we fall back to elementsFromPoint, which
+      // returns the full z-ordered stack, and take the first grabbable in-scope one.
+      topElement = getDeepElementAtPoint(clientX, clientY);
+      usesTextHitTesting = topElement ? getElementTextBounds(topElement) !== null : false;
+      localContentElement = topElement
+        ? getLocalContentElementAtPoint(topElement, clientX, clientY)
+        : null;
+      const localContentResult = localContentElement
+        ? resolveValidElementAtPoint(localContentElement, clientX, clientY)
+        : null;
+      const topResult = topElement
+        ? resolveValidElementAtPoint(topElement, clientX, clientY)
+        : null;
+      fallbackResult = topResult ?? getDeepFallbackElementAtPoint(clientX, clientY);
+      result = localContentResult ?? fallbackResult;
+    }
 
     if (result && isIframeElement(result) && !getAccessibleIframeDocument(result)) {
       const iframeBounds = createElementBounds(result);
